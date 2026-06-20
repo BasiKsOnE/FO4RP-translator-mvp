@@ -226,6 +226,7 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 		}
 
 		SayLog( map, crInfo( cr, !isGM( cr ) ) + " :" + finalMsg + ":", x, y );
+		WriteTranslationBridgeRequest( cr, "narration", "", x, y, finalMsg );
 		players.resize(0);
 	}
 	else
@@ -486,6 +487,146 @@ void unsafe_shout_all( Critter& cr, int, int, int, string@ message, int[]@ )
 	seeing.resize(0);
 }
 
+void WriteTranslationBridgeRequest( Critter& cr, string style, string volume, int hexX, int hexY, string translationText )
+{
+	if( !valid( cr ) || translationText.length() == 0 )
+	{
+		return;
+	}
+
+	bool probablyRu = false;
+	for( uint i = 0; i < translationText.length(); i++ )
+	{
+		if( translationText[i] > 127 )
+		{
+			probablyRu = true;
+			break;
+		}
+	}
+
+	string direction = probablyRu ? "ru_to_en" : "en_to_ru";
+	file f;
+	if( f.open( "logs\\translation_bridge_requests.txt", "a" ) >= 0 )
+	{
+		f.writeString( "" + GetTick() + "|" + cr.Id + "|" + direction + "|" + style + "|" + volume + "|" + hexX + "|" + hexY + "|" + translationText + "\n" );
+		f.close();
+	}
+}
+
+void WriteTranslationBridgeRequestFromSay( Critter& cr, int sayType, string@ message )
+{
+	if( !valid( message ) || message.length() == 0 )
+	{
+		return;
+	}
+
+	if( sayType != SAY_NORM && sayType != SAY_WHISP && sayType != SAY_SHOUT && sayType != SAY_EMOTE )
+	{
+		return;
+	}
+
+	string style = "speech";
+	string volume = "";
+	string translationText = message;
+	uint messageLength = message.length();
+
+	if( sayType == SAY_WHISP )
+	{
+		style = "whisper";
+		volume = "3";
+	}
+	else if( sayType == SAY_SHOUT )
+	{
+		style = "shout";
+		volume = "70";
+	}
+	else if( sayType == SAY_EMOTE )
+	{
+		style = "emote";
+	}
+
+	if( messageLength > 3 && message[0] == '/' && message[1] == '/' )
+	{
+		uint volumeEnd = 2;
+		while( volumeEnd < messageLength && message[volumeEnd] >= '0' && message[volumeEnd] <= '9' )
+		{
+			volumeEnd++;
+		}
+
+		if( volumeEnd > 2 && volumeEnd < messageLength && message[volumeEnd] == ' ' )
+		{
+			style = "speech";
+			volume = substring( message, 2, volumeEnd - 2 );
+			translationText = substring( message, volumeEnd + 1, messageLength - volumeEnd - 1 );
+		}
+	}
+	else if( messageLength >= 4 && message[0] == '-' && message[1] == '-' && message[messageLength - 2] == '-' && message[messageLength - 1] == '-' )
+	{
+		style = "whisper";
+		volume = "3";
+		translationText = substring( message, 2, messageLength - 4 );
+	}
+	else if( messageLength >= 4 && message[0] == '+' && message[1] == '+' && message[messageLength - 2] == '+' && message[messageLength - 1] == '+' )
+	{
+		if( sayType == SAY_SHOUT )
+		{
+			style = "shout";
+			volume = "70";
+		}
+		else
+		{
+			style = "loud";
+			volume = "50";
+		}
+		translationText = substring( message, 2, messageLength - 4 );
+	}
+	else if( messageLength >= 2 && message[0] == '*' && message[messageLength - 1] == '*' )
+	{
+		style = "emote";
+		volume = "";
+		translationText = substring( message, 1, messageLength - 2 );
+	}
+
+	WriteTranslationBridgeRequest( cr, style, volume, cr.HexX, cr.HexY, translationText );
+}
+
+void EmitTranslationBridgeNarration( Critter& cr, int hexX, int hexY, string translatedText )
+{
+	if( hexX <= 0 || hexY <= 0 )
+	{
+		hexX = cr.HexX;
+		hexY = cr.HexY;
+	}
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Critter@[] players;
+	map.GetCritters( 0, FIND_ALL|FIND_ONLY_PLAYERS, players );
+
+	for( uint i = 0, len = players.length(); i < len; i++ )
+	{
+		Critter@ currPlayer = players[i];
+		if( !valid( currPlayer ) )
+		{
+			continue;
+		}
+
+		int dist = GetDistantion( hexX, hexY, currPlayer.HexX, currPlayer.HexY );
+		if( !isGM( currPlayer ) && dist > NARATIVE_MSG_RANGE )
+		{
+			continue;
+		}
+
+		currPlayer.RunClientScript( "client_main@ShowNarrativeMessage", hexX, hexY, ( isGM( cr ) ? 1 : 0 ), translatedText, null );
+	}
+
+	players.resize(0);
+}
+
 void unsafe_SayLog( Critter& cr, int sayType, int, int, string@ message, int[]@ )
 {
 	if( SayLog( cr, sayType, message ) == "" )
@@ -493,58 +634,129 @@ void unsafe_SayLog( Critter& cr, int sayType, int, int, string@ message, int[]@ 
 		testInfo( cr, "Failed to log text: #" + cr.Id + " " + sayType + " '" + message + "'" );
 	}
 
-	if( sayType == SAY_NORM && valid( message ) && message.length() > 0 )
+	WriteTranslationBridgeRequestFromSay( cr, sayType, message );
+}
+
+void ProcessTranslationBridgeResponses()
+{
+	filesystem fs;
+	string responseFile = "logs\\translation_bridge_responses.txt";
+	string processingFile = "logs\\translation_bridge_responses.processing.txt";
+
+	fs.deleteFile( processingFile );
+	fs.move( responseFile, processingFile );
+
+	file f;
+	if( f.open( processingFile, "r" ) < 0 )
 	{
-		string volume = "";
-		string translationText = message;
-		uint messageLength = message.length();
-		if( messageLength > 3 && message[0] == '/' && message[1] == '/' )
-		{
-			uint volumeEnd = 2;
-			while( volumeEnd < messageLength && message[volumeEnd] >= '0' && message[volumeEnd] <= '9' )
-			{
-				volumeEnd++;
-			}
+		return;
+	}
 
-			if( volumeEnd > 2 && volumeEnd < messageLength && message[volumeEnd] == ' ' )
-			{
-				volume = substring( message, 2, volumeEnd - 2 );
-				translationText = substring( message, volumeEnd + 1, messageLength - volumeEnd - 1 );
-			}
+	string data = "";
+	f.readString( f.getSize(), data );
+	f.close();
+	fs.deleteFile( processingFile );
+
+	string@[] lines = splitEx( data, "\n" );
+	for( uint i = 0; i < lines.length(); i++ )
+	{
+		string line = lines[i];
+		if( line.length() == 0 )
+		{
+			continue;
 		}
 
-		bool probablyRu = false;
-		for( uint i = 0; i < translationText.length(); i++ )
+		if( line[line.length() - 1] == 13 )
 		{
-			if( translationText[i] > 127 )
+			line = substring( line, 0, line.length() - 1 );
+		}
+
+		array<string> parts;
+		string part = "";
+		uint separators = 0;
+		for( uint p = 0; p < line.length(); p++ )
+		{
+			if( line[p] == '|' && separators < 7 )
 			{
-				probablyRu = true;
-				break;
+				parts.insertLast( part );
+				part = "";
+				separators++;
+			}
+			else
+			{
+				part += substring( line, p, 1 );
 			}
 		}
+		parts.insertLast( part );
 
-		string direction = probablyRu ? "ru_to_en" : "en_to_ru";
-		file f;
-		if( f.open( "logs\\translation_bridge_requests.txt", "a" ) >= 0 )
+		if( parts.length() < 8 )
 		{
-			f.writeString( "" + GetTick() + "|" + cr.Id + "|" + direction + "|" + volume + "|" + translationText + "\n" );
-			f.close();
+			continue;
 		}
 
-		string translatedMessage = "";
-		if( probablyRu )
+		int crid = 0;
+		if( !StrToInt( parts[1], crid ) )
 		{
-			translatedMessage = "[EN SERVER TEST] " + translationText;
+			continue;
+		}
+
+		Critter@ cr = GetCritter( uint( crid ) );
+		if( !valid( cr ) )
+		{
+			continue;
+		}
+
+		string style = parts[3];
+		string volume = parts[4];
+		int hexX = cr.HexX;
+		int hexY = cr.HexY;
+		int parsedHexX = 0;
+		int parsedHexY = 0;
+		if( StrToInt( parts[5], parsedHexX ) && parsedHexX > 0 )
+		{
+			hexX = parsedHexX;
+		}
+		if( StrToInt( parts[6], parsedHexY ) && parsedHexY > 0 )
+		{
+			hexY = parsedHexY;
+		}
+		string translatedText = parts[7];
+
+		if( translatedText.length() == 0 )
+		{
+			continue;
+		}
+
+		if( style == "whisper" )
+		{
+			cr.Say( SAY_NORM, "--" + translatedText + "--" );
+		}
+		else if( style == "loud" )
+		{
+			cr.Say( SAY_NORM, "++" + translatedText + "++" );
+		}
+		else if( style == "shout" )
+		{
+			cr.Say( SAY_NORM, "//70 " + translatedText );
+		}
+		else if( style == "emote" )
+		{
+			cr.Say( SAY_NORM, "*" + translatedText + "*" );
+		}
+		else if( style == "narration" )
+		{
+			EmitTranslationBridgeNarration( cr, hexX, hexY, translatedText );
+		}
+		else if( volume != "" )
+		{
+			cr.Say( SAY_NORM, "//" + volume + " " + translatedText );
 		}
 		else
 		{
-			translatedMessage = "[RU SERVER TEST] " + translationText;
+			cr.Say( SAY_NORM, translatedText );
 		}
-
-		cr.Say( SAY_NORM, translatedMessage );
 	}
 }
-
 void unsafe_stopTyping( Critter& cr, int, int, int, string@, int[]@ )
 {
 	StopTyping( cr );

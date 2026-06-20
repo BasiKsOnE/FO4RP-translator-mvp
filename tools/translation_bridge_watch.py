@@ -10,27 +10,27 @@ ENCODING = "cp1251"
 DEFAULT_RESPONSE_MAILBOX = "logs/translation_bridge_responses.txt"
 
 
-def parse_request(line: str) -> tuple[str, str, str, str, str] | None:
+def parse_request(line: str) -> tuple[str, str, str, str, str, str, str, str] | None:
     line = line.rstrip("\r\n")
     if not line:
         return None
 
-    parts = line.split("|", 4)
-    if len(parts) != 5:
+    parts = line.split("|", 7)
+    if len(parts) != 8:
         print(f"Skipping malformed request: {line!r}", flush=True)
         return None
 
-    return parts[0], parts[1], parts[2], parts[3], parts[4]
+    return parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]
 
 
 def write_fake_response(
-    path: Path, tick: str, crid: str, direction: str, volume: str, text: str
+    path: Path, tick: str, crid: str, direction: str, style: str, volume: str, hex_x: str, hex_y: str, text: str
 ) -> None:
     label = "[RU BRIDGE TEST]" if direction == "en_to_ru" else "[EN BRIDGE TEST]"
     translated_text = f"{label} {text}"
 
     with path.open("a", encoding=ENCODING, errors="replace") as responses:
-        responses.write(f"{tick}|{crid}|{direction}|{volume}|{translated_text}\n")
+        responses.write(f"{tick}|{crid}|{direction}|{style}|{volume}|{hex_x}|{hex_y}|{translated_text}\n")
 
 
 def print_request(line: str, response_path: Path) -> None:
@@ -38,14 +38,17 @@ def print_request(line: str, response_path: Path) -> None:
     if parsed is None:
         return
 
-    tick, crid, direction, volume, text = parsed
+    tick, crid, direction, style, volume, hex_x, hex_y, text = parsed
     print(f"tick={tick}", flush=True)
     print(f"crid={crid}", flush=True)
     print(f"direction={direction}", flush=True)
+    print(f"style={style}", flush=True)
     print(f"volume={volume}", flush=True)
+    print(f"hex_x={hex_x}", flush=True)
+    print(f"hex_y={hex_y}", flush=True)
     print(f"text={text}", flush=True)
     print("", flush=True)
-    write_fake_response(response_path, tick, crid, direction, volume, text)
+    write_fake_response(response_path, tick, crid, direction, style, volume, hex_x, hex_y, text)
 
 
 def watch(path: Path, response_path: Path, interval: float) -> None:

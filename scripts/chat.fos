@@ -185,25 +185,6 @@ bool InMessage( string& message, int& sayType, uint& senderCritterID, uint& dela
 
 	chatMessage.OnInMessage( SpeechIllegibilityGenerator() );
 	chatMessage.InMessage( message, sayType );
-	bool probablyRu = false;
-	for( uint i = 0; i < message.length(); i++ )
-	{
-		if( message[i] > 127 )
-		{
-			probablyRu = true;
-			break;
-		}
-	}
-
-	if( probablyRu )
-	{
-		message += "\n[EN TEST] " + message;
-	}
-	else
-	{
-		message += "\n[RU TEST] " + message;
-	}
-
 	return true;
 }
 

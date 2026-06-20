@@ -4,8 +4,10 @@ import uint manager_loop() from "manager";
 uint next_manager_loop = 0;
 
 import void MenuRedrawLoop(uint tick) from "suck_less";
+import void ProcessTranslationBridgeResponses() from "rp_chat";
 
 bool firstCycle = true;
+uint next_translation_bridge_loop = 0;
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call every returned value, in milliseconds.
@@ -23,6 +25,11 @@ uint loop()
 
     // check for new messages from web server
     DllLoop();
+
+    if( tick > next_translation_bridge_loop ) {
+        next_translation_bridge_loop = tick + 250;
+        ProcessTranslationBridgeResponses();
+    }
 
     MenuRedrawLoop(tick);
 
