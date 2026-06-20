@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ENCODING = "cp1251"
+DEFAULT_RESPONSE_MAILBOX = "logs/translation_bridge_responses.txt"
 
 
 def parse_request(line: str) -> tuple[str, str, str, str, str] | None:
@@ -22,7 +23,17 @@ def parse_request(line: str) -> tuple[str, str, str, str, str] | None:
     return parts[0], parts[1], parts[2], parts[3], parts[4]
 
 
-def print_request(line: str) -> None:
+def write_fake_response(
+    path: Path, tick: str, crid: str, direction: str, volume: str, text: str
+) -> None:
+    label = "[RU BRIDGE TEST]" if direction == "en_to_ru" else "[EN BRIDGE TEST]"
+    translated_text = f"{label} {text}"
+
+    with path.open("a", encoding=ENCODING, errors="replace") as responses:
+        responses.write(f"{tick}|{crid}|{direction}|{volume}|{translated_text}\n")
+
+
+def print_request(line: str, response_path: Path) -> None:
     parsed = parse_request(line)
     if parsed is None:
         return
@@ -34,10 +45,12 @@ def print_request(line: str) -> None:
     print(f"volume={volume}", flush=True)
     print(f"text={text}", flush=True)
     print("", flush=True)
+    write_fake_response(response_path, tick, crid, direction, volume, text)
 
 
-def watch(path: Path, interval: float) -> None:
+def watch(path: Path, response_path: Path, interval: float) -> None:
     print(f"Watching translation mailbox: {path}", flush=True)
+    print(f"Writing fake responses to: {response_path}", flush=True)
     print(f"Mailbox encoding: {ENCODING}", flush=True)
     print("Starting at end of file; only new requests will be printed.", flush=True)
 
@@ -61,7 +74,7 @@ def watch(path: Path, interval: float) -> None:
                 mailbox.seek(position)
 
             for line in mailbox:
-                print_request(line)
+                print_request(line, response_path)
 
             position = mailbox.tell()
 
@@ -82,9 +95,14 @@ def main() -> None:
         default=0.25,
         help="Polling interval in seconds.",
     )
+    parser.add_argument(
+        "--responses",
+        default=DEFAULT_RESPONSE_MAILBOX,
+        help="Path to the fake translation response mailbox.",
+    )
     args = parser.parse_args()
 
-    watch(Path(args.mailbox), args.interval)
+    watch(Path(args.mailbox), Path(args.responses), args.interval)
 
 
 if __name__ == "__main__":
