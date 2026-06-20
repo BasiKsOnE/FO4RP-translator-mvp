@@ -181,7 +181,13 @@ With the fake backend, translations are test labels:
 
 ## Testing real translation with MyMemory
 
-The MyMemory backend uses a free public translation endpoint.
+The MyMemory backend uses the public MyMemory REST endpoint anonymously by default.
+
+No API key, token, maintainer account, or BasiKsOnE email address is included in this repo. If someone runs this on their own private server, the MyMemory requests come from that server, machine, and network, not from BasiKsOnE.
+
+MyMemory public anonymous usage has a limited free quota, currently documented as 5,000 chars/day. MyMemory also documents a higher free quota, currently 50,000 chars/day, when a `de=` email parameter is provided. This MVP does not send `de=` by default.
+
+Server operators should check MyMemory's current usage limits and terms before relying on it. Treat this as a free public test backend, not production infrastructure.
 
 Do not use this for private or sensitive text. It is for proof-of-concept testing only.
 
@@ -435,14 +441,16 @@ Near-term:
 2. Keep `mymemory` backend for free real-translation testing.
 3. Improve error handling and logging around public backend failures.
 4. Add simple rate limiting / cooldown protection.
-5. Add docs for backend setup and privacy warnings.
+5. Add optional operator-provided MyMemory email/config support.
+6. Add docs for backend setup and privacy warnings.
 
 Mid-term:
 
 1. Investigate client-side translation path.
 2. Confirm whether client-side code can suppress, replace, or locally re-display incoming chat as proper overhead speech.
 3. Prototype a native client-side library with AngelScript bindings.
-4. Support both local and cloud translation providers through one interface.
+4. Prototype local/self-hosted translation backend support.
+5. Support both local and cloud translation providers through one interface.
 
 Long-term:
 
@@ -462,6 +470,12 @@ Long-term:
 ## Privacy warning
 
 The `mymemory` backend sends chat text to a public third-party translation service.
+
+By default, this repo sends anonymous public MyMemory requests. It does not include a BasiKsOnE API key, token, email address, or account. Traffic belongs to whoever runs the worker: their server, machine, and network make the requests.
+
+Public anonymous MyMemory usage is limited, currently documented as 5,000 chars/day. MyMemory currently documents 50,000 chars/day when a `de=` email parameter is provided, but this MVP does not send that parameter by default.
+
+Server operators should check MyMemory's current limits and terms before enabling it for a community. It is useful for free proof-of-concept testing, not as production translation infrastructure.
 
 For private testing, sensitive RP, staff-only text, or production use, prefer a local translation backend or a trusted self-hosted service.
 
