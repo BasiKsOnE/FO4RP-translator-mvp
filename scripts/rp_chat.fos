@@ -320,7 +320,7 @@ void heard_radio_log_ch0( Critter& cr, string@ message )
 	
 	string@ text = "`Radio 0> .." + message + "..`";
 
-	DiscordSendMessage( "нулевой_радиоканал", text );
+	DiscordSendMessage( "пїЅпїЅпїЅпїЅпїЅпїЅпїЅ_пїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅпїЅ", text );
 	DiscordSendMessage( "radio_0", text );
 }
 
@@ -491,6 +491,31 @@ void unsafe_SayLog( Critter& cr, int sayType, int, int, string@ message, int[]@ 
 	if( SayLog( cr, sayType, message ) == "" )
 	{
 		testInfo( cr, "Failed to log text: #" + cr.Id + " " + sayType + " '" + message + "'" );
+	}
+
+	if( sayType == SAY_NORM && valid( message ) && message.length() > 0 )
+	{
+		bool probablyRu = false;
+		for( uint i = 0; i < message.length(); i++ )
+		{
+			if( message[i] > 127 )
+			{
+				probablyRu = true;
+				break;
+			}
+		}
+
+		string translatedMessage = "";
+		if( probablyRu )
+		{
+			translatedMessage = "[EN SERVER TEST] " + message;
+		}
+		else
+		{
+			translatedMessage = "[RU SERVER TEST] " + message;
+		}
+
+		cr.Say( SAY_NORM, translatedMessage );
 	}
 }
 
