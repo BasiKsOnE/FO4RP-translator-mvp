@@ -426,6 +426,18 @@ void unsafe_shout_all( Critter& cr, int, int, int, string@ message, int[]@ )
 {
 	uint dist = 250;
 
+	bool probablyRu = false;
+	for( uint i = 0; i < message.length(); i++ )
+	{
+		if( message[i] > 127 )
+		{
+			probablyRu = true;
+			break;
+		}
+	}
+
+	uint requiredTranslationFlag = probablyRu ? PLAYER_FLAG_TRANSLATE_RUEN : PLAYER_FLAG_TRANSLATE_ENRU;
+
 	if( !isGM( cr ) )
 	{
 		dist = 100;
@@ -479,12 +491,34 @@ void unsafe_shout_all( Critter& cr, int, int, int, string@ message, int[]@ )
 		uint idist = GetDistantion( cr.HexX, cr.HexY, currCritter.HexX, currCritter.HexY );
 		if( int( idist ) <= currCritter.Stat[ ST_PERCEPTION ] * 10 )
 		{
+			if( FLAG( currCritter.Param[ PLAYER_FLAGS ], requiredTranslationFlag ) )
+			{
+				continue;
+			}
+
 			currCritter.Say( SAY_NETMSG, "???: |0x00FF0000 !!! " + strupr( message ) + " !!!" );
 		}
 	}
 
 	crs.resize(0);
 	seeing.resize(0);
+}
+
+void unsafe_SetTranslationPreference( Critter& cr, int direction, int enabled, int, string@, int[]@ )
+{
+	uint flag = direction == 0 ? PLAYER_FLAG_TRANSLATE_ENRU : PLAYER_FLAG_TRANSLATE_RUEN;
+	string label = direction == 0 ? "EN->RU translation: " : "RU->EN translation: ";
+
+	if( enabled != 0 )
+	{
+		SETFLAG( cr.ParamBase[ PLAYER_FLAGS ], flag );
+		cr.Say( SAY_NETMSG, label + "ON" );
+	}
+	else
+	{
+		UNSETFLAG( cr.ParamBase[ PLAYER_FLAGS ], flag );
+		cr.Say( SAY_NETMSG, label + "OFF" );
+	}
 }
 
 void WriteTranslationBridgeRequest( Critter& cr, string style, string volume, int hexX, int hexY, string translationText )
@@ -590,7 +624,106 @@ void WriteTranslationBridgeRequestFromSay( Critter& cr, int sayType, string@ mes
 	WriteTranslationBridgeRequest( cr, style, volume, cr.HexX, cr.HexY, translationText );
 }
 
-void EmitTranslationBridgeNarration( Critter& cr, int hexX, int hexY, string translatedText )
+string AddTranslationBridgeMetadata( string direction, string text )
+{
+	string marker = "~tltr|" + direction + "|";
+	uint len = text.length();
+
+	if( len > 3 && text[0] == '/' && text[1] == '/' )
+	{
+		uint i = 2;
+		bool hasDigits = false;
+		while( i < len && text[i] >= 48 && text[i] <= 57 )
+		{
+			hasDigits = true;
+			i++;
+		}
+		if( hasDigits && i < len && text[i] == ' ' )
+		{
+			return substring( text, 0, i + 1 ) + marker + substring( text, i + 1, len - i - 1 );
+		}
+	}
+
+	if( len >= 4 && text[0] == '-' && text[1] == '-' && text[len - 2] == '-' && text[len - 1] == '-' )
+	{
+		return "--" + marker + substring( text, 2, len - 4 ) + "--";
+	}
+
+	if( len >= 4 && text[0] == '+' && text[1] == '+' && text[len - 2] == '+' && text[len - 1] == '+' )
+	{
+		return "++" + marker + substring( text, 2, len - 4 ) + "++";
+	}
+
+	if( len >= 2 && text[0] == '*' && text[len - 1] == '*' )
+	{
+		return "*" + marker + substring( text, 1, len - 2 ) + "*";
+	}
+
+	return marker + text;
+}
+void EmitTranslationBridgeShout( Critter& cr, string direction, string message )
+{
+	uint dist = 250;
+
+	if( !isGM( cr ) )
+	{
+		dist = 100;
+	}
+
+	string shoutText = strupr( message );
+	cr.Say( SAY_NORM, AddTranslationBridgeMetadata( direction, "|0xFF0000 !!!" + shoutText + "!!!" ) );
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Critter@[] crs;
+	uint count = map.GetCrittersHex(cr.HexX, cr.HexY, dist, FIND_ALL, crs);
+
+    Critter@[] seeing;
+	uint count2 = map.GetCrittersSeeing( array<Critter@> = { cr }, true, FIND_ALL | FIND_ONLY_PLAYERS, seeing );
+
+	Critter@ currCritter = null;
+	Critter@ currSeeing = null;
+	for( uint i = 0; i < count; i++ )
+	{
+		@ currCritter = crs[i];
+		if(!valid(currCritter)) continue;
+
+		bool isSkipping = false;
+		for( uint j = 0; j < count2; j++ )
+		{
+			@ currSeeing = seeing[j];
+			if(!valid(currSeeing))
+			{
+				continue;
+			}
+
+			if( currCritter.Id == currSeeing.Id )
+			{
+				isSkipping = true;
+				break;
+			}
+		}
+
+		if( isSkipping )
+		{
+			continue;
+		}
+
+		uint idist = GetDistantion( cr.HexX, cr.HexY, currCritter.HexX, currCritter.HexY );
+		if( int( idist ) <= currCritter.Stat[ ST_PERCEPTION ] * 10 )
+		{
+			currCritter.Say( SAY_NETMSG, AddTranslationBridgeMetadata( direction, "???: |0x00FF0000 !!! " + shoutText + " !!!" ) );
+		}
+	}
+
+	crs.resize(0);
+	seeing.resize(0);
+}
+void EmitTranslationBridgeResponse( Critter& cr, string direction, string style, string volume, int hexX, int hexY, string translatedText )
 {
 	if( hexX <= 0 || hexY <= 0 )
 	{
@@ -601,6 +734,61 @@ void EmitTranslationBridgeNarration( Critter& cr, int hexX, int hexY, string tra
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
+		return;
+	}
+
+	uint requiredFlag = direction == "en_to_ru" ? PLAYER_FLAG_TRANSLATE_ENRU : PLAYER_FLAG_TRANSLATE_RUEN;
+	int range = 10;
+	int bridgeSayType = SAY_NORM;
+	string bridgeText = translatedText;
+	int centerX = cr.HexX;
+	int centerY = cr.HexY;
+
+	if( style == "narration" )
+	{
+		range = NARATIVE_MSG_RANGE;
+		centerX = hexX;
+		centerY = hexY;
+	}
+	else if( style == "whisper" )
+	{
+		range = __WisperDist;
+		bridgeSayType = SAY_WHISP;
+		bridgeText = "--" + translatedText + "--";
+	}
+	else if( style == "loud" )
+	{
+		range = 50;
+		bridgeSayType = SAY_NORM;
+		bridgeText = "++" + translatedText + "++";
+	}
+	else if( style == "shout" )
+	{
+		range = isGM( cr ) ? 250 : 100;
+		bridgeSayType = SAY_NORM;
+		bridgeText = "++" + translatedText + "++";
+	}
+	else if( style == "emote" )
+	{
+		range = 10;
+		bridgeSayType = SAY_EMOTE;
+	}
+	else if( volume != "" )
+	{
+		StrToInt( volume, range );
+		bridgeSayType = SAY_NORM;
+		bridgeText = "//" + volume + " " + translatedText;
+	}
+
+	if( style == "shout" )
+	{
+		EmitTranslationBridgeShout( cr, direction, bridgeText );
+		return;
+	}
+
+	if( style != "narration" )
+	{
+		cr.Say( bridgeSayType, AddTranslationBridgeMetadata( direction, bridgeText ) );
 		return;
 	}
 
@@ -615,13 +803,27 @@ void EmitTranslationBridgeNarration( Critter& cr, int hexX, int hexY, string tra
 			continue;
 		}
 
-		int dist = GetDistantion( hexX, hexY, currPlayer.HexX, currPlayer.HexY );
-		if( !isGM( currPlayer ) && dist > NARATIVE_MSG_RANGE )
+		if( !FLAG( currPlayer.Param[ PLAYER_FLAGS ], requiredFlag ) )
 		{
 			continue;
 		}
 
-		currPlayer.RunClientScript( "client_main@ShowNarrativeMessage", hexX, hexY, ( isGM( cr ) ? 1 : 0 ), translatedText, null );
+		int dist = GetDistantion( centerX, centerY, currPlayer.HexX, currPlayer.HexY );
+		if( style == "narration" && !isGM( currPlayer ) && dist > range )
+		{
+			continue;
+		}
+		else if( style != "narration" && dist > range )
+		{
+			continue;
+		}
+
+		if( style == "narration" )
+		{
+			currPlayer.RunClientScript( "client_main@ShowNarrativeMessage", hexX, hexY, ( isGM( cr ) ? 1 : 0 ), translatedText, null );
+			continue;
+		}
+		currPlayer.RunClientScript( "client_main@ShowTranslationBridgeMessage", cr.Id, bridgeSayType, 0, bridgeText, null );
 	}
 
 	players.resize(0);
@@ -706,6 +908,7 @@ void ProcessTranslationBridgeResponses()
 			continue;
 		}
 
+		string direction = parts[2];
 		string style = parts[3];
 		string volume = parts[4];
 		int hexX = cr.HexX;
@@ -727,34 +930,7 @@ void ProcessTranslationBridgeResponses()
 			continue;
 		}
 
-		if( style == "whisper" )
-		{
-			cr.Say( SAY_NORM, "--" + translatedText + "--" );
-		}
-		else if( style == "loud" )
-		{
-			cr.Say( SAY_NORM, "++" + translatedText + "++" );
-		}
-		else if( style == "shout" )
-		{
-			cr.Say( SAY_NORM, "//70 " + translatedText );
-		}
-		else if( style == "emote" )
-		{
-			cr.Say( SAY_NORM, "*" + translatedText + "*" );
-		}
-		else if( style == "narration" )
-		{
-			EmitTranslationBridgeNarration( cr, hexX, hexY, translatedText );
-		}
-		else if( volume != "" )
-		{
-			cr.Say( SAY_NORM, "//" + volume + " " + translatedText );
-		}
-		else
-		{
-			cr.Say( SAY_NORM, translatedText );
-		}
+		EmitTranslationBridgeResponse( cr, direction, style, volume, hexX, hexY, translatedText );
 	}
 }
 void unsafe_stopTyping( Critter& cr, int, int, int, string@, int[]@ )

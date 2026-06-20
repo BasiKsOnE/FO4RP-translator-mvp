@@ -354,6 +354,8 @@
 #define PLAYER_FLAG_VOICE_R	                		( 0x00000100 ) 	// Show Voice Radius
 #define PLAYER_FLAG_WEAPON_R	                	( 0x00000200 ) 	// Show weapon Radius
 #define PLAYER_FLAG_NPC_ICONS	                	( 0x00000400 ) 	// Show NPC icons
+#define PLAYER_FLAG_TRANSLATE_ENRU                	( 0x00000800 ) 	// Show EN->RU translated chat echoes
+#define PLAYER_FLAG_TRANSLATE_RUEN                	( 0x00001000 ) 	// Show RU->EN translated chat echoes
 
 //Flags for face, avatar and description hiding items
 #define ITM_FACE_MASK								( 0x00000001 )

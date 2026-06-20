@@ -1601,6 +1601,110 @@ bool map_message( string& message, uint16& hexX, uint16& hexY, uint& color, uint
 	return true;
 }
 
+bool TranslationBridgeHasPrefixAt( string& message, uint pos )
+{
+	if( message.length() < pos + 6 )
+	{
+		return false;
+	}
+	return substring( message, pos, 6 ) == "~tltr|";
+}
+
+int TranslationBridgeFindPrefix( string& message )
+{
+	if( TranslationBridgeHasPrefixAt( message, 0 ) )
+	{
+		return 0;
+	}
+
+	uint len = message.length();
+	if( len > 3 && message[0] == '/' && message[1] == '/' )
+	{
+		uint i = 2;
+		bool hasDigits = false;
+		while( i < len && message[i] >= 48 && message[i] <= 57 )
+		{
+			hasDigits = true;
+			i++;
+		}
+		if( hasDigits && i < len && message[i] == ' ' && TranslationBridgeHasPrefixAt( message, i + 1 ) )
+		{
+			return int( i + 1 );
+		}
+	}
+
+	if( len >= 8 && message[0] == '-' && message[1] == '-' && TranslationBridgeHasPrefixAt( message, 2 ) )
+	{
+		return 2;
+	}
+
+	if( len >= 8 && message[0] == '+' && message[1] == '+' && TranslationBridgeHasPrefixAt( message, 2 ) )
+	{
+		return 2;
+	}
+
+	if( len >= 7 && message[0] == '*' && TranslationBridgeHasPrefixAt( message, 1 ) )
+	{
+		return 1;
+	}
+
+	return -1;
+}
+
+bool TranslationBridgeConsume( string& message, string& direction )
+{
+	int prefixPosInt = TranslationBridgeFindPrefix( message );
+	if( prefixPosInt < 0 )
+	{
+		return false;
+	}
+
+	uint prefixPos = uint( prefixPosInt );
+	uint dirStart = prefixPos + 6;
+	uint dirEnd = dirStart;
+	while( dirEnd < message.length() && message[dirEnd] != '|' )
+	{
+		dirEnd++;
+	}
+
+	if( dirEnd >= message.length() )
+	{
+		return false;
+	}
+
+	direction = substring( message, dirStart, dirEnd - dirStart );
+	if( direction != "en_to_ru" && direction != "ru_to_en" )
+	{
+		return false;
+	}
+
+	string before = substring( message, 0, prefixPos );
+	string after = substring( message, dirEnd + 1, message.length() - dirEnd - 1 );
+	message = before + after;
+	return true;
+}
+
+bool TranslationBridgeLooksHighByte( string& message )
+{
+	for( uint i = 0, len = message.length(); i < len; i++ )
+	{
+		if( message[i] > 127 )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool TranslationBridgeDirectionEnabled( CritterCl@ receiver, string& direction )
+{
+	if( !valid( receiver ) )
+	{
+		return false;
+	}
+	return ( direction == "en_to_ru" && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_ENRU ) ) ||
+	       ( direction == "ru_to_en" && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_RUEN ) );
+}
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on receive message.
 // By default delay == [TextDelay + message length * 100] ms
@@ -1611,9 +1715,37 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		return false;
 	}
 	
+	CritterCl@ receiver = GetChosen();
+	string bridgeDirection = "";
+	bool isTranslationBridge = false;
+	if( TranslationBridgeConsume( message, bridgeDirection ) )
+	{
+		isTranslationBridge = true;
+		if( !TranslationBridgeDirectionEnabled( receiver, bridgeDirection ) )
+		{
+			return false;
+		}
+	}
+
     if( sayType > SAY_RADIO )
 	{
 		return true;
+	}
+
+	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
+	{
+		bool probablyRu = TranslationBridgeLooksHighByte( message );
+		if( valid( receiver ) )
+		{
+			if( probablyRu && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_RUEN ) )
+			{
+				return false;
+			}
+			if( !probablyRu && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_ENRU ) )
+			{
+				return false;
+			}
+		}
 	}
 
     if(!InMessage(message, sayType, critterId, delay))
@@ -1621,8 +1753,6 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
         return false;
     }
 
-	CritterCl@ receiver = GetChosen();
-	
     if( sayType == SAY_RADIO )
 	{
 		if( last_radio_message.length() != message.length() && findFirst( last_radio_message, message ) == -1 )
@@ -1796,6 +1926,36 @@ bool out_command( string& message, int& sayType )
 		}
 
 		string@[]@ parts = split( message, " " );
+
+		if( parts[0] == "~enru" || parts[0] == "~ruen" )
+		{
+			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" ) )
+			{
+				Message( "Usage: ~enru 1" );
+				Message( "Usage: ~enru 0" );
+				Message( "Usage: ~ruen 1" );
+				Message( "Usage: ~ruen 0" );
+				return false;
+			}
+
+			int enabled = 0;
+			if( !StrToInt( parts[1], enabled ) )
+			{
+				Message( "Usage: ~enru 1" );
+				Message( "Usage: ~enru 0" );
+				Message( "Usage: ~ruen 1" );
+				Message( "Usage: ~ruen 0" );
+				return false;
+			}
+
+			int direction = 0;
+			if( parts[0] == "~ruen" )
+			{
+				direction = 1;
+			}
+			RunServerScriptUnsafe( "rp_chat@unsafe_SetTranslationPreference", direction, enabled, 0, null, null );
+			return false;
+		}
 
 		if( parts[0] == "~name" ) 
 		{
@@ -7192,6 +7352,41 @@ void ShowNarrativeMessage( int hx, int hy, int isGM, string@ text, int[]@ )
 	uint color = isGM != 0 ? COLOR_GRAY : COLOR_LGRAY;
 	MapMessage( text, uint16(hx), uint16(hy), time, color, true, 0, 0 );
 	Message( (isGM != 0 ? "|0x7F7F7F " : "|0xABABAB " ) + text, SAY_NETMSG );
+}
+
+void ShowTranslationBridgeMessage( int speakerId, int sayType, int, string@ text, int[]@ )
+{
+	if( !valid( text ) )
+	{
+		return;
+	}
+
+	string message = text;
+	if( message.length() < 1 )
+	{
+		return;
+	}
+
+	CritterCl@ speaker = GetCritter( uint( speakerId ) );
+	if( !valid( speaker ) )
+	{
+		Message( message, SAY_NETMSG );
+		return;
+	}
+
+	uint senderCritterID = uint( speakerId );
+	uint delay = 0;
+	if( !in_message( message, sayType, senderCritterID, delay ) )
+	{
+		return;
+	}
+
+	if( message.length() < 1 )
+	{
+		return;
+	}
+
+	Message( speaker.Name + ": " + message, SAY_NETMSG );
 }
 
 void ShowSensorBlip( int hx, int hy, int msg, string@ param3, int[]@ param4 )
