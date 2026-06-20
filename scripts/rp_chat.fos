@@ -495,24 +495,50 @@ void unsafe_SayLog( Critter& cr, int sayType, int, int, string@ message, int[]@ 
 
 	if( sayType == SAY_NORM && valid( message ) && message.length() > 0 )
 	{
-		bool probablyRu = false;
-		for( uint i = 0; i < message.length(); i++ )
+		string volume = "";
+		string translationText = message;
+		uint messageLength = message.length();
+		if( messageLength > 3 && message[0] == '/' && message[1] == '/' )
 		{
-			if( message[i] > 127 )
+			uint volumeEnd = 2;
+			while( volumeEnd < messageLength && message[volumeEnd] >= '0' && message[volumeEnd] <= '9' )
+			{
+				volumeEnd++;
+			}
+
+			if( volumeEnd > 2 && volumeEnd < messageLength && message[volumeEnd] == ' ' )
+			{
+				volume = substring( message, 2, volumeEnd - 2 );
+				translationText = substring( message, volumeEnd + 1, messageLength - volumeEnd - 1 );
+			}
+		}
+
+		bool probablyRu = false;
+		for( uint i = 0; i < translationText.length(); i++ )
+		{
+			if( translationText[i] > 127 )
 			{
 				probablyRu = true;
 				break;
 			}
 		}
 
+		string direction = probablyRu ? "ru_to_en" : "en_to_ru";
+		file f;
+		if( f.open( "logs\\translation_bridge_requests.txt", "a" ) >= 0 )
+		{
+			f.writeString( "" + GetTick() + "|" + cr.Id + "|" + direction + "|" + volume + "|" + translationText + "\n" );
+			f.close();
+		}
+
 		string translatedMessage = "";
 		if( probablyRu )
 		{
-			translatedMessage = "[EN SERVER TEST] " + message;
+			translatedMessage = "[EN SERVER TEST] " + translationText;
 		}
 		else
 		{
-			translatedMessage = "[RU SERVER TEST] " + message;
+			translatedMessage = "[RU SERVER TEST] " + translationText;
 		}
 
 		cr.Say( SAY_NORM, translatedMessage );
