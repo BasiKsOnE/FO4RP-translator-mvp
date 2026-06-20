@@ -8,6 +8,7 @@ from pathlib import Path
 
 ENCODING = "cp1251"
 DEFAULT_RESPONSE_MAILBOX = "logs/translation_bridge_responses.txt"
+TRANSLATION_ERROR_MODE = "fallback"
 
 
 def parse_request(line: str) -> tuple[str, str, str, str, str, str, str, str] | None:
@@ -23,11 +24,33 @@ def parse_request(line: str) -> tuple[str, str, str, str, str, str, str, str] | 
     return parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]
 
 
-def write_fake_response(
+def translate_text(direction: str, style: str, text: str) -> str:
+    # Real translation backend plugs in here later. Keep this function pure:
+    # direction/style/text in, translated text out.
+    if direction == "en_to_ru":
+        return "[RU BRIDGE TEST] " + text
+    if direction == "ru_to_en":
+        return "[EN BRIDGE TEST] " + text
+    return text
+
+
+def safe_translate_text(direction: str, style: str, text: str) -> str | None:
+    try:
+        return translate_text(direction, style, text)
+    except Exception as exc:
+        print(f"Translation failed for direction={direction!r}, style={style!r}: {exc}", flush=True)
+        if TRANSLATION_ERROR_MODE == "skip":
+            return None
+        return text
+
+
+def write_response(
     path: Path, tick: str, crid: str, direction: str, style: str, volume: str, hex_x: str, hex_y: str, text: str
 ) -> None:
-    label = "[RU BRIDGE TEST]" if direction == "en_to_ru" else "[EN BRIDGE TEST]"
-    translated_text = f"{label} {text}"
+    translated_text = safe_translate_text(direction, style, text)
+    if translated_text is None:
+        print(f"Skipping response for tick={tick}, crid={crid}", flush=True)
+        return
 
     with path.open("a", encoding=ENCODING, errors="replace") as responses:
         responses.write(f"{tick}|{crid}|{direction}|{style}|{volume}|{hex_x}|{hex_y}|{translated_text}\n")
@@ -48,7 +71,7 @@ def print_request(line: str, response_path: Path) -> None:
     print(f"hex_y={hex_y}", flush=True)
     print(f"text={text}", flush=True)
     print("", flush=True)
-    write_fake_response(response_path, tick, crid, direction, style, volume, hex_x, hex_y, text)
+    write_response(response_path, tick, crid, direction, style, volume, hex_x, hex_y, text)
 
 
 def watch(path: Path, response_path: Path, interval: float) -> None:
