@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import time
 from pathlib import Path
 
 
 ENCODING = "cp1251"
 DEFAULT_RESPONSE_MAILBOX = "logs/translation_bridge_responses.txt"
-TRANSLATION_ERROR_MODE = "fallback"
+TRANSLATION_BACKEND = os.environ.get("TRANSLATION_BACKEND", "fake").strip().lower()
+TRANSLATION_ERROR_MODE = os.environ.get("TRANSLATION_ERROR_MODE", "fallback").strip().lower()
 
 
 def parse_request(line: str) -> tuple[str, str, str, str, str, str, str, str] | None:
@@ -24,14 +26,21 @@ def parse_request(line: str) -> tuple[str, str, str, str, str, str, str, str] | 
     return parts[0], parts[1], parts[2], parts[3], parts[4], parts[5], parts[6], parts[7]
 
 
-def translate_text(direction: str, style: str, text: str) -> str:
-    # Real translation backend plugs in here later. Keep this function pure:
-    # direction/style/text in, translated text out.
+def translate_fake(direction: str, style: str, text: str) -> str:
     if direction == "en_to_ru":
         return "[RU BRIDGE TEST] " + text
     if direction == "ru_to_en":
         return "[EN BRIDGE TEST] " + text
     return text
+
+
+def translate_text(direction: str, style: str, text: str) -> str:
+    # Real translation backends plug in here later. Keep backend functions pure:
+    # direction/style/text in, translated text out.
+    if TRANSLATION_BACKEND == "fake":
+        return translate_fake(direction, style, text)
+
+    raise ValueError(f"Unsupported translation backend: {TRANSLATION_BACKEND}")
 
 
 def safe_translate_text(direction: str, style: str, text: str) -> str | None:
@@ -76,7 +85,9 @@ def print_request(line: str, response_path: Path) -> None:
 
 def watch(path: Path, response_path: Path, interval: float) -> None:
     print(f"Watching translation mailbox: {path}", flush=True)
-    print(f"Writing fake responses to: {response_path}", flush=True)
+    print(f"Writing translation responses to: {response_path}", flush=True)
+    print(f"Translation backend: {TRANSLATION_BACKEND}", flush=True)
+    print(f"Translation error mode: {TRANSLATION_ERROR_MODE}", flush=True)
     print(f"Mailbox encoding: {ENCODING}", flush=True)
     print("Starting at end of file; only new requests will be printed.", flush=True)
 
