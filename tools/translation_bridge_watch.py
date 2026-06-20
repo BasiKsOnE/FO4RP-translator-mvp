@@ -2,13 +2,19 @@
 from __future__ import annotations
 
 import argparse
+import html
+import json
 import os
 import time
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 
 ENCODING = "cp1251"
 DEFAULT_RESPONSE_MAILBOX = "logs/translation_bridge_responses.txt"
+MYMEMORY_ENDPOINT = "https://api.mymemory.translated.net/get"
+MYMEMORY_TIMEOUT_SECONDS = 5
 TRANSLATION_BACKEND = os.environ.get("TRANSLATION_BACKEND", "fake").strip().lower()
 TRANSLATION_ERROR_MODE = os.environ.get("TRANSLATION_ERROR_MODE", "fallback").strip().lower()
 
@@ -34,11 +40,47 @@ def translate_fake(direction: str, style: str, text: str) -> str:
     return text
 
 
+def translate_mymemory(direction: str, style: str, text: str) -> str:
+    # Free public test backend with public rate limits; not suitable for production.
+    if direction == "en_to_ru":
+        langpair = "en|ru"
+    elif direction == "ru_to_en":
+        langpair = "ru|en"
+    else:
+        raise ValueError(f"Unsupported translation direction for MyMemory: {direction}")
+
+    query = urllib.parse.urlencode(
+        {
+            "q": text,
+            "langpair": langpair,
+        }
+    )
+    url = f"{MYMEMORY_ENDPOINT}?{query}"
+    request = urllib.request.Request(url, headers={"User-Agent": "FO4RP translation bridge"})
+
+    with urllib.request.urlopen(request, timeout=MYMEMORY_TIMEOUT_SECONDS) as response:
+        raw_body = response.read()
+
+    body = raw_body.decode("utf-8", errors="replace")
+    payload = json.loads(body)
+    response_data = payload.get("responseData")
+    if not isinstance(response_data, dict):
+        raise ValueError("MyMemory response missing responseData")
+
+    translated_text = response_data.get("translatedText")
+    if not translated_text:
+        raise ValueError("MyMemory response missing responseData.translatedText")
+
+    return html.unescape(str(translated_text))
+
+
 def translate_text(direction: str, style: str, text: str) -> str:
     # Real translation backends plug in here later. Keep backend functions pure:
     # direction/style/text in, translated text out.
     if TRANSLATION_BACKEND == "fake":
         return translate_fake(direction, style, text)
+    if TRANSLATION_BACKEND == "mymemory":
+        return translate_mymemory(direction, style, text)
 
     raise ValueError(f"Unsupported translation backend: {TRANSLATION_BACKEND}")
 
