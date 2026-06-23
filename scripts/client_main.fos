@@ -1791,21 +1791,6 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		return true;
 	}
 
-	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
-	{
-		bool probablyRu = TranslationBridgeLooksHighByte( message );
-		if( valid( receiver ) )
-		{
-			if( probablyRu && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_RUEN ) )
-			{
-				return false;
-			}
-			if( !probablyRu && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_ENRU ) )
-			{
-				return false;
-			}
-		}
-	}
 
 	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
 	{
@@ -1995,45 +1980,6 @@ bool out_command( string& message, int& sayType )
 
 		string@[]@ parts = split( message, " " );
 
-		if( parts[0] == "~ctenru" || parts[0] == "~ctruen" )
-		{
-			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" ) )
-			{
-				Message( "Usage: ~ctenru 1" );
-				Message( "Usage: ~ctenru 0" );
-				Message( "Usage: ~ctruen 1" );
-				Message( "Usage: ~ctruen 0" );
-				return false;
-			}
-
-			int enabled = 0;
-			if( !StrToInt( parts[1], enabled ) )
-			{
-				Message( "Usage: ~ctenru 1" );
-				Message( "Usage: ~ctenru 0" );
-				Message( "Usage: ~ctruen 1" );
-				Message( "Usage: ~ctruen 0" );
-				return false;
-			}
-
-			if( parts[0] == "~ctenru" )
-			{
-				ClientTranslateEnRu = enabled != 0;
-				if( ClientTranslateEnRu )
-					Message( "Client EN->RU translation: ON" );
-				else
-					Message( "Client EN->RU translation: OFF" );
-			}
-			else
-			{
-				ClientTranslateRuEn = enabled != 0;
-				if( ClientTranslateRuEn )
-					Message( "Client RU->EN translation: ON" );
-				else
-					Message( "Client RU->EN translation: OFF" );
-			}
-			return false;
-		}
 
 		if( parts[0] == "~enru" || parts[0] == "~ruen" )
 		{
@@ -2056,12 +2002,30 @@ bool out_command( string& message, int& sayType )
 				return false;
 			}
 
-			int direction = 0;
-			if( parts[0] == "~ruen" )
+			if( parts[0] == "~enru" )
 			{
-				direction = 1;
+				ClientTranslateEnRu = enabled != 0;
+				if( ClientTranslateEnRu )
+				{
+					Message( "EN->RU client translation: ON" );
+				}
+				else
+				{
+					Message( "EN->RU client translation: OFF" );
+				}
 			}
-			RunServerScriptUnsafe( "rp_chat@unsafe_SetTranslationPreference", direction, enabled, 0, null, null );
+			else
+			{
+				ClientTranslateRuEn = enabled != 0;
+				if( ClientTranslateRuEn )
+				{
+					Message( "RU->EN client translation: ON" );
+				}
+				else
+				{
+					Message( "RU->EN client translation: OFF" );
+				}
+			}
 			return false;
 		}
 
