@@ -68,6 +68,9 @@ import void CreateEconomyList() from "client_craft_economy";
 import void qmap_iface() from "qmap_client";
 import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
 
+bool ClientTranslateEnRu = false;
+bool ClientTranslateRuEn = false;
+
 import void InputBoxKeyPressed( uint8 key ) from "client_screen_inputbox";
 import void InputBoxClipboardInsert()  from "client_screen_inputbox";
 import void SwitchHotkeyLayer(int layer) from "client_hotkey_bind";
@@ -1705,6 +1708,62 @@ bool TranslationBridgeDirectionEnabled( CritterCl@ receiver, string& direction )
 	return ( direction == "en_to_ru" && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_ENRU ) ) ||
 	       ( direction == "ru_to_en" && FLAG( receiver.Param[ PLAYER_FLAGS ], PLAYER_FLAG_TRANSLATE_RUEN ) );
 }
+
+bool ClientTranslationLooksHighByte( string& text )
+{
+	for( uint i = 0, len = text.length(); i < len; i++ )
+	{
+		if( text[i] > 127 )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool ShouldClientTranslateIncoming( string& message, int sayType, string& direction )
+{
+	if( message.length() == 0 )
+	{
+		return false;
+	}
+
+	if( message[0] == '|' )
+	{
+		return false;
+	}
+
+	if( sayType > SAY_WHISP_ON_HEAD )
+	{
+		return false;
+	}
+
+	bool probablyRu = ClientTranslationLooksHighByte( message );
+	if( probablyRu && ClientTranslateRuEn )
+	{
+		direction = "ru_to_en";
+		return true;
+	}
+	if( !probablyRu && ClientTranslateEnRu )
+	{
+		direction = "en_to_ru";
+		return true;
+	}
+	return false;
+}
+
+string ClientTranslateFake( string& direction, string& text )
+{
+	if( direction == "en_to_ru" )
+	{
+		return "[RU CLIENT TEST] " + text;
+	}
+	if( direction == "ru_to_en" )
+	{
+		return "[EN CLIENT TEST] " + text;
+	}
+	return text;
+}
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on receive message.
 // By default delay == [TextDelay + message length * 100] ms
@@ -1750,7 +1809,11 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 
 	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
 	{
-		message = "[CLIENT HOOK TEST] " + message;
+		string clientTranslationDirection = "";
+		if( ShouldClientTranslateIncoming( message, sayType, clientTranslationDirection ) )
+		{
+			message = ClientTranslateFake( clientTranslationDirection, message );
+		}
 	}
 
     if(!InMessage(message, sayType, critterId, delay))
@@ -1931,6 +1994,46 @@ bool out_command( string& message, int& sayType )
 		}
 
 		string@[]@ parts = split( message, " " );
+
+		if( parts[0] == "~ctenru" || parts[0] == "~ctruen" )
+		{
+			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" ) )
+			{
+				Message( "Usage: ~ctenru 1" );
+				Message( "Usage: ~ctenru 0" );
+				Message( "Usage: ~ctruen 1" );
+				Message( "Usage: ~ctruen 0" );
+				return false;
+			}
+
+			int enabled = 0;
+			if( !StrToInt( parts[1], enabled ) )
+			{
+				Message( "Usage: ~ctenru 1" );
+				Message( "Usage: ~ctenru 0" );
+				Message( "Usage: ~ctruen 1" );
+				Message( "Usage: ~ctruen 0" );
+				return false;
+			}
+
+			if( parts[0] == "~ctenru" )
+			{
+				ClientTranslateEnRu = enabled != 0;
+				if( ClientTranslateEnRu )
+					Message( "Client EN->RU translation: ON" );
+				else
+					Message( "Client EN->RU translation: OFF" );
+			}
+			else
+			{
+				ClientTranslateRuEn = enabled != 0;
+				if( ClientTranslateRuEn )
+					Message( "Client RU->EN translation: ON" );
+				else
+					Message( "Client RU->EN translation: OFF" );
+			}
+			return false;
+		}
 
 		if( parts[0] == "~enru" || parts[0] == "~ruen" )
 		{
