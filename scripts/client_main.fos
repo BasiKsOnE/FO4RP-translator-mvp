@@ -1748,6 +1748,11 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		}
 	}
 
+	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
+	{
+		message = "[CLIENT HOOK TEST] " + message;
+	}
+
     if(!InMessage(message, sayType, critterId, delay))
 	{
         return false;
