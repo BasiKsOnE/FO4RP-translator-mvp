@@ -2006,6 +2006,36 @@ bool out_command( string& message, int& sayType )
 			}
 			return false;
 		}
+		if( message == "~file_bridge_test" )
+		{
+			filesystem fs;
+			fs.makeDir( "translation_bridge" );
+
+			file requestFile;
+			if( requestFile.open( "translation_bridge\\request.txt", "w" ) < 0 )
+			{
+				Message( "File bridge request write failed" );
+				return false;
+			}
+
+			requestFile.writeString( "ping\n" );
+			requestFile.close();
+
+			file responseFile;
+			if( responseFile.open( "translation_bridge\\response.txt", "r" ) >= 0 )
+			{
+				string response = "";
+				responseFile.readString( responseFile.getSize(), response );
+				responseFile.close();
+				Message( "File bridge response: " + response );
+			}
+			else
+			{
+				Message( "File bridge wrote request" );
+			}
+
+			return false;
+		}
 		string@[]@ parts = split( message, " " );
 
 
