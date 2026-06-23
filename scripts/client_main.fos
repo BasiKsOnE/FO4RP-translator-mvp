@@ -1752,15 +1752,28 @@ bool ShouldClientTranslateIncoming( string& message, int sayType, string& direct
 	return false;
 }
 
-string ClientTranslateFake( string& direction, string& text )
+bool TranslateChatSync( string& direction, string& input, string& output )
 {
 	if( direction == "en_to_ru" )
 	{
-		return "[RU CLIENT TEST] " + text;
+		output = "[RU CLIENT TEST] " + input;
+		return true;
 	}
 	if( direction == "ru_to_en" )
 	{
-		return "[EN CLIENT TEST] " + text;
+		output = "[EN CLIENT TEST] " + input;
+		return true;
+	}
+	output = input;
+	return false;
+}
+
+string ClientTranslateSync( string& direction, string& text )
+{
+	string translated = "";
+	if( TranslateChatSync( direction, text, translated ) )
+	{
+		return translated;
 	}
 	return text;
 }
@@ -1797,7 +1810,7 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		string clientTranslationDirection = "";
 		if( ShouldClientTranslateIncoming( message, sayType, clientTranslationDirection ) )
 		{
-			message = ClientTranslateFake( clientTranslationDirection, message );
+			message = ClientTranslateSync( clientTranslationDirection, message );
 		}
 	}
 
@@ -1978,6 +1991,21 @@ bool out_command( string& message, int& sayType )
             return false;
 		}
 
+		if( message == "~native_test" )
+		{
+			CritterCl@ nativeTestChosen = GetChosen();
+			if( valid( nativeTestChosen ) )
+			{
+				bool injured = nativeTestChosen.IsInjured();
+				string injuredText = injured ? "1" : "0";
+				Message( "Native client test OK: injured=" + injuredText );
+			}
+			else
+			{
+				Message( "Native client test failed: no chosen" );
+			}
+			return false;
+		}
 		string@[]@ parts = split( message, " " );
 
 
