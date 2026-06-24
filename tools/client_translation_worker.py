@@ -9,43 +9,68 @@ DEFAULT_CLIENT_ROOT = Path(r"C:\FOnlines\TLJ_CLIENT_LOCAL")
 POLL_SECONDS = 0.25
 
 
-def fake_translate(request_text: str) -> str:
-    if request_text == "ping":
-        return "pong from fake worker"
-    return "[FAKE TRANSLATION] " + request_text
+def parse_record(raw_text: str) -> dict[str, str]:
+    record: dict[str, str] = {}
+    for line in raw_text.splitlines():
+        key, separator, value = line.partition("=")
+        if separator:
+            record[key.strip()] = value
+    return record
 
 
-def read_request(path: Path) -> str | None:
+def fake_translate(direction: str, text: str) -> str:
+    if direction == "en_to_ru":
+        return "[RU FILE TEST] " + text
+    if direction == "ru_to_en":
+        return "[EN FILE TEST] " + text
+    return "[UNKNOWN FILE TEST] " + text
+
+
+def read_text_file(path: Path) -> str | None:
     if not path.exists():
         return None
     return path.read_text(encoding="utf-8", errors="replace").strip()
 
 
-def write_response(path: Path, text: str) -> None:
-    path.write_text(text, encoding="utf-8", errors="replace")
+def write_response(path: Path, speaker: str, direction: str, translated_text: str) -> None:
+    path.write_text(
+        f"speaker={speaker}\ndirection={direction}\ntranslated={translated_text}\n",
+        encoding="utf-8",
+        errors="replace",
+    )
 
 
 def watch(client_root: Path) -> None:
     mailbox_dir = client_root / "translation_bridge"
-    request_path = mailbox_dir / "request.txt"
-    response_path = mailbox_dir / "response.txt"
-    last_request = None
+    requests_dir = mailbox_dir / "requests"
+    responses_dir = mailbox_dir / "responses"
 
-    mailbox_dir.mkdir(parents=True, exist_ok=True)
+    requests_dir.mkdir(parents=True, exist_ok=True)
+    responses_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Client translation worker started")
     print(f"Client root: {client_root}")
-    print(f"Watching: {request_path}")
-    print(f"Writing: {response_path}")
+    print(f"Watching: {requests_dir}")
+    print(f"Writing: {responses_dir}")
 
     while True:
-        request_text = read_request(request_path)
-        if request_text and request_text != last_request:
+        for request_path in sorted(requests_dir.glob("*.txt")):
+            response_path = responses_dir / request_path.name
+            if response_path.exists():
+                continue
+
+            request_text = read_text_file(request_path)
+            if not request_text:
+                continue
+
             print(f"Request read: {request_text}")
-            response_text = fake_translate(request_text)
-            write_response(response_path, response_text)
-            print(f"Response written: {response_text}")
-            last_request = request_text
+            request = parse_record(request_text)
+            speaker = request.get("speaker", "Test")
+            direction = request.get("direction", "")
+            text = request.get("text", "")
+            response_text = fake_translate(direction, text)
+            write_response(response_path, speaker, direction, response_text)
+            print(f"Response written: {response_path}: {response_text}")
 
         time.sleep(POLL_SECONDS)
 

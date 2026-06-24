@@ -243,12 +243,95 @@ bool start()
 // Main loop function. Returned time of next call in milliseconds.
 
 uint loop_turn = 0;
+uint ClientFileBridgeTestId = 1;
+uint ClientFileBridgeNextResponseId = 1;
+uint ClientFileBridgeLastPollTick = 0;
+
+void ClientFileBridgeEnsureDirs()
+{
+	filesystem fs;
+	fs.makeDir( "translation_bridge" );
+	fs.makeDir( "translation_bridge\\requests" );
+	fs.makeDir( "translation_bridge\\responses" );
+}
+
+string ClientFileBridgeValue( string data, string key )
+{
+	string prefix = key + "=";
+	string@[]@ lines = splitEx( data, "\n" );
+	for( uint i = 0; i < lines.length(); i++ )
+	{
+		string line = lines[i];
+		delN( line );
+		if( findFirst( line, prefix ) == 0 )
+		{
+			return substring( line, prefix.length(), line.length() - prefix.length() );
+		}
+	}
+	return "";
+}
+
+bool ClientFileBridgeWriteTestRequest( uint requestId )
+{
+	ClientFileBridgeEnsureDirs();
+
+	file requestFile;
+	if( requestFile.open( "translation_bridge\\requests\\" + requestId + ".txt", "w" ) < 0 )
+	{
+		return false;
+	}
+
+	requestFile.writeString( "speaker=Test\n" );
+	requestFile.writeString( "direction=en_to_ru\n" );
+	requestFile.writeString( "text=hello\n" );
+	requestFile.close();
+	return true;
+}
+
+void ClientFileBridgePollResponses()
+{
+	uint now = GetTick();
+	if( now - ClientFileBridgeLastPollTick < 250 )
+	{
+		return;
+	}
+	ClientFileBridgeLastPollTick = now;
+
+	if( ClientFileBridgeNextResponseId >= ClientFileBridgeTestId )
+	{
+		return;
+	}
+
+	file responseFile;
+	if( responseFile.open( "translation_bridge\\responses\\" + ClientFileBridgeNextResponseId + ".txt", "r" ) < 0 )
+	{
+		return;
+	}
+
+	string response = "";
+	responseFile.readString( responseFile.getSize(), response );
+	responseFile.close();
+
+	string speaker = ClientFileBridgeValue( response, "speaker" );
+	string translated = ClientFileBridgeValue( response, "translated" );
+	if( speaker.length() == 0 )
+	{
+		speaker = "Test";
+	}
+
+	if( translated.length() > 0 )
+	{
+		Message( "[TL] " + speaker + ": " + translated );
+		ClientFileBridgeNextResponseId += 1;
+	}
+}
 
 uint loop()
 {
     FOFMOD_Update();
     WASDInputLoop();
 	ProcessEvents();
+	ClientFileBridgePollResponses();
 
     if( loop_turn % 4 == 0 )
 	{
@@ -2008,32 +2091,15 @@ bool out_command( string& message, int& sayType )
 		}
 		if( message == "~file_bridge_test" )
 		{
-			filesystem fs;
-			fs.makeDir( "translation_bridge" );
-
-			file requestFile;
-			if( requestFile.open( "translation_bridge\\request.txt", "w" ) < 0 )
+			uint requestId = ClientFileBridgeTestId;
+			if( !ClientFileBridgeWriteTestRequest( requestId ) )
 			{
 				Message( "File bridge request write failed" );
 				return false;
 			}
 
-			requestFile.writeString( "ping\n" );
-			requestFile.close();
-
-			file responseFile;
-			if( responseFile.open( "translation_bridge\\response.txt", "r" ) >= 0 )
-			{
-				string response = "";
-				responseFile.readString( responseFile.getSize(), response );
-				responseFile.close();
-				Message( "File bridge response: " + response );
-			}
-			else
-			{
-				Message( "File bridge wrote request" );
-			}
-
+			ClientFileBridgeTestId += 1;
+			Message( "File bridge wrote request " + requestId );
 			return false;
 		}
 		string@[]@ parts = split( message, " " );
