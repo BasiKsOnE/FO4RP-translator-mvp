@@ -243,9 +243,10 @@ bool start()
 // Main loop function. Returned time of next call in milliseconds.
 
 uint loop_turn = 0;
-uint ClientFileBridgeTestId = 1;
+uint ClientFileBridgeNextRequestId = 1;
 uint ClientFileBridgeNextResponseId = 1;
 uint ClientFileBridgeLastPollTick = 0;
+bool ClientFileBridgeIncomingEnabled = false;
 
 void ClientFileBridgeEnsureDirs()
 {
@@ -283,11 +284,211 @@ bool ClientFileBridgeWriteTestRequest( uint requestId )
 
 	requestFile.writeString( "speaker=Test\n" );
 	requestFile.writeString( "direction=en_to_ru\n" );
+	requestFile.writeString( "raw_text=hello\n" );
 	requestFile.writeString( "text=hello\n" );
 	requestFile.close();
 	return true;
 }
 
+bool ClientFileBridgeIsValidVolumeMarker( string& text, uint pos, uint& endPos )
+{
+	if( pos + 2 >= text.length() )
+	{
+		return false;
+	}
+
+	if( text[pos] != '/' || text[pos + 1] != '/' )
+	{
+		return false;
+	}
+
+	uint digitPos = pos + 2;
+	if( text[digitPos] < 48 || text[digitPos] > 57 )
+	{
+		return false;
+	}
+
+	int volume = 0;
+	while( digitPos < text.length() && text[digitPos] >= 48 && text[digitPos] <= 57 )
+	{
+		volume = volume * 10 + int( text[digitPos] - 48 );
+		digitPos++;
+	}
+
+	if( volume < 1 || volume > 50 )
+	{
+		return false;
+	}
+
+	endPos = digitPos;
+	return true;
+}
+
+bool ClientFileBridgeHasPairedMarkerAhead( string& text, uint pos, string marker )
+{
+	if( pos + marker.length() >= text.length() )
+	{
+		return false;
+	}
+
+	string rest = substring( text, pos + marker.length(), text.length() - pos - marker.length() );
+	return findFirst( rest, marker ) != -1;
+}
+
+string ClientFileBridgeCollapseSpaces( string text )
+{
+	string result = "";
+	bool lastWasSpace = true;
+
+	for( uint i = 0; i < text.length(); i++ )
+	{
+		if( text[i] == ' ' )
+		{
+			if( !lastWasSpace )
+			{
+				result += " ";
+				lastWasSpace = true;
+			}
+		}
+		else
+		{
+			result += substring( text, i, 1 );
+			lastWasSpace = false;
+		}
+	}
+
+	if( result.length() > 0 && result[result.length() - 1] == ' ' )
+	{
+		result = substring( result, 0, result.length() - 1 );
+	}
+
+	return result;
+}
+
+string ClientFileBridgeNormalizeText( string& rawText )
+{
+	string normalized = "";
+	bool inLoud = false;
+	bool inWhisper = false;
+	uint i = 0;
+
+	while( i < rawText.length() )
+	{
+		uint markerEnd = i;
+		if( ClientFileBridgeIsValidVolumeMarker( rawText, i, markerEnd ) )
+		{
+			i = markerEnd;
+			continue;
+		}
+
+		if( i + 1 < rawText.length() && rawText[i] == '+' && rawText[i + 1] == '+' )
+		{
+			if( inLoud || ClientFileBridgeHasPairedMarkerAhead( rawText, i, "++" ) )
+			{
+				inLoud = !inLoud;
+				i += 2;
+				continue;
+			}
+		}
+
+		if( i + 1 < rawText.length() && rawText[i] == '-' && rawText[i + 1] == '-' )
+		{
+			if( inWhisper || ClientFileBridgeHasPairedMarkerAhead( rawText, i, "--" ) )
+			{
+				inWhisper = !inWhisper;
+				i += 2;
+				continue;
+			}
+		}
+
+		normalized += substring( rawText, i, 1 );
+		i++;
+	}
+
+	return ClientFileBridgeCollapseSpaces( normalized );
+}
+
+bool ClientFileBridgeShouldQueueIncoming( string& message, int sayType, uint critterId )
+{
+	if( !ClientFileBridgeIncomingEnabled )
+	{
+		return false;
+	}
+
+	if( message.length() == 0 )
+	{
+		return false;
+	}
+
+	if( critterId == 0 )
+	{
+		return false;
+	}
+
+	if( message[0] == '|' )
+	{
+		return false;
+	}
+
+	if( message.length() >= 4 && substring( message, 0, 4 ) == "[TL]" )
+	{
+		return false;
+	}
+
+	return sayType == SAY_NORM ||
+	       sayType == SAY_NORM_ON_HEAD ||
+	       sayType == SAY_WHISP ||
+	       sayType == SAY_WHISP_ON_HEAD ||
+	       sayType == SAY_SHOUT ||
+	       sayType == SAY_SHOUT_ON_HEAD ||
+	       sayType == SAY_EMOTE ||
+	       sayType == SAY_EMOTE_ON_HEAD;
+}
+
+string ClientFileBridgeSpeakerName( uint critterId )
+{
+	CritterCl@ speaker = GetCritter( critterId );
+	if( valid( speaker ) && speaker.Name.length() > 0 )
+	{
+		return speaker.Name;
+	}
+	return "???";
+}
+
+bool ClientFileBridgeQueueIncoming( string& message, int sayType, uint critterId )
+{
+	if( !ClientFileBridgeShouldQueueIncoming( message, sayType, critterId ) )
+	{
+		return false;
+	}
+
+	string normalizedText = ClientFileBridgeNormalizeText( message );
+	if( normalizedText.length() == 0 )
+	{
+		return false;
+	}
+
+	string direction = ClientTranslationLooksHighByte( normalizedText ) ? "ru_to_en" : "en_to_ru";
+	string speaker = ClientFileBridgeSpeakerName( critterId );
+	uint requestId = ClientFileBridgeNextRequestId;
+
+	ClientFileBridgeEnsureDirs();
+
+	file requestFile;
+	if( requestFile.open( "translation_bridge\\requests\\" + requestId + ".txt", "w" ) < 0 )
+	{
+		return false;
+	}
+
+	requestFile.writeString( "speaker=" + speaker + "\n" );
+	requestFile.writeString( "direction=" + direction + "\n" );
+	requestFile.writeString( "raw_text=" + message + "\n" );
+	requestFile.writeString( "text=" + normalizedText + "\n" );
+	requestFile.close();
+
+	ClientFileBridgeNextRequestId += 1;
+	return true;
+}
 void ClientFileBridgePollResponses()
 {
 	uint now = GetTick();
@@ -297,7 +498,7 @@ void ClientFileBridgePollResponses()
 	}
 	ClientFileBridgeLastPollTick = now;
 
-	if( ClientFileBridgeNextResponseId >= ClientFileBridgeTestId )
+	if( ClientFileBridgeNextResponseId >= ClientFileBridgeNextRequestId )
 	{
 		return;
 	}
@@ -1643,6 +1844,8 @@ bool map_message( string& message, uint16& hexX, uint16& hexY, uint& color, uint
 		return false;
 	}
 	
+	string originalBridgeMessage = message;
+
     // Detect radio
     if( color == 0xFFFFFFFE )
 	{
@@ -1870,6 +2073,8 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		return false;
 	}
 	
+	string originalBridgeMessage = message;
+
 	CritterCl@ receiver = GetChosen();
 	string bridgeDirection = "";
 	bool isTranslationBridge = false;
@@ -1895,6 +2100,10 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		{
 			message = ClientTranslateSync( clientTranslationDirection, message );
 		}
+	}
+	if( !isTranslationBridge )
+	{
+		ClientFileBridgeQueueIncoming( originalBridgeMessage, sayType, critterId );
 	}
 
     if(!InMessage(message, sayType, critterId, delay))
@@ -2091,15 +2300,28 @@ bool out_command( string& message, int& sayType )
 		}
 		if( message == "~file_bridge_test" )
 		{
-			uint requestId = ClientFileBridgeTestId;
+			uint requestId = ClientFileBridgeNextRequestId;
 			if( !ClientFileBridgeWriteTestRequest( requestId ) )
 			{
 				Message( "File bridge request write failed" );
 				return false;
 			}
 
-			ClientFileBridgeTestId += 1;
+			ClientFileBridgeNextRequestId += 1;
 			Message( "File bridge wrote request " + requestId );
+			return false;
+		}
+		if( message == "~file_bridge_incoming 1" )
+		{
+			ClientFileBridgeIncomingEnabled = true;
+			Message( "File bridge incoming: ON" );
+			return false;
+		}
+
+		if( message == "~file_bridge_incoming 0" )
+		{
+			ClientFileBridgeIncomingEnabled = false;
+			Message( "File bridge incoming: OFF" );
 			return false;
 		}
 		string@[]@ parts = split( message, " " );
@@ -3724,10 +3946,9 @@ string item_description( ItemCl& item, int lookType )
 }
 
 string replaceLetterN( string line )
-{//'#' ==	`35` && '¹' == 185
-	return replaceLetter( line, uint('#'), uint('¹') );
+{
+	return replaceLetter( line, uint(35), uint(185) );
 }
-
 string replaceLetter( string line, uint letter, uint replacement )
 {
 	for( uint i = 0, l = line.length(); i < l; i++ )
