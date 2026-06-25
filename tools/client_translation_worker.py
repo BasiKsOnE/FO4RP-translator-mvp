@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 import time
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from pathlib import Path
 DEFAULT_CLIENT_ROOT = Path(r"C:\FOnlines\TLJ_CLIENT_LOCAL")
 POLL_SECONDS = 0.25
 BRIDGE_ENCODING = "cp1251"
+TRANSLATION_BACKEND = os.environ.get("TRANSLATION_BACKEND", "fake").lower()
 
 
 def parse_record(raw_text: str) -> dict[str, str]:
@@ -25,6 +28,62 @@ def fake_translate(direction: str, text: str) -> str:
     if direction == "ru_to_en":
         return "[EN FILE TEST] " + text
     return "[UNKNOWN FILE TEST] " + text
+
+
+def configure_argos_environment() -> None:
+    os.environ.setdefault("OMP_NUM_THREADS", "1")
+    os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+
+def argos_translate(direction: str, text: str) -> str:
+    if direction == "en_to_ru":
+        source_code = "en"
+        target_code = "ru"
+    elif direction == "ru_to_en":
+        source_code = "ru"
+        target_code = "en"
+    else:
+        return "[ARGOS ERROR] unknown direction " + direction
+
+    configure_argos_environment()
+
+    try:
+        from argostranslate import translate
+    except ImportError:
+        return "[ARGOS ERROR] argostranslate not installed"
+
+    try:
+        return translate.translate(text, source_code, target_code)
+    except Exception as error:
+        return "[ARGOS ERROR] " + str(error)
+
+
+def translate_text(direction: str, text: str) -> str:
+    if TRANSLATION_BACKEND == "fake":
+        return fake_translate(direction, text)
+    if TRANSLATION_BACKEND == "argos":
+        return argos_translate(direction, text)
+    return "[UNKNOWN BACKEND] " + text
+
+
+def warmup_argos() -> None:
+    if TRANSLATION_BACKEND != "argos":
+        return
+
+    configure_argos_environment()
+    print("Warming up Argos...")
+    start_time = time.perf_counter()
+
+    try:
+        from argostranslate import translate
+
+        translate.translate("hello", "en", "ru")
+        translate.translate("привет", "ru", "en")
+        elapsed = time.perf_counter() - start_time
+        print(f"Argos warmup complete in {elapsed:.3f}s")
+    except Exception as error:
+        print(f"Argos warmup failed: {error}")
 
 
 def read_text_file(path: Path) -> str | None:
@@ -47,9 +106,18 @@ def watch(client_root: Path) -> None:
     responses_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Client translation worker started")
+    print(f"Backend: {TRANSLATION_BACKEND}")
+    print(f"Python: {sys.executable}")
+    if TRANSLATION_BACKEND == "argos":
+        configure_argos_environment()
+        print(f"OMP_NUM_THREADS: {os.environ.get('OMP_NUM_THREADS', 'unset')}")
+        print(f"MKL_NUM_THREADS: {os.environ.get('MKL_NUM_THREADS', 'unset')}")
+        print(f"OPENBLAS_NUM_THREADS: {os.environ.get('OPENBLAS_NUM_THREADS', 'unset')}")
     print(f"Client root: {client_root}")
     print(f"Watching: {requests_dir}")
     print(f"Writing: {responses_dir}")
+
+    warmup_argos()
 
     while True:
         for request_path in sorted(requests_dir.glob("*.txt")):
@@ -66,7 +134,10 @@ def watch(client_root: Path) -> None:
             speaker = request.get("speaker", "Test")
             direction = request.get("direction", "")
             text = request.get("text", "")
-            response_text = fake_translate(direction, text)
+            translation_start = time.perf_counter()
+            response_text = translate_text(direction, text)
+            translation_elapsed = time.perf_counter() - translation_start
+            print(f"Translation time: {translation_elapsed:.3f}s")
             write_response(response_path, speaker, direction, response_text)
             print(f"Response written: {response_path}: {response_text}")
 
