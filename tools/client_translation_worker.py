@@ -7,6 +7,7 @@ from pathlib import Path
 
 DEFAULT_CLIENT_ROOT = Path(r"C:\FOnlines\TLJ_CLIENT_LOCAL")
 POLL_SECONDS = 0.25
+BRIDGE_ENCODING = "cp1251"
 
 
 def parse_record(raw_text: str) -> dict[str, str]:
@@ -29,15 +30,12 @@ def fake_translate(direction: str, text: str) -> str:
 def read_text_file(path: Path) -> str | None:
     if not path.exists():
         return None
-    return path.read_text(encoding="utf-8", errors="replace").strip()
+    return path.read_bytes().decode(BRIDGE_ENCODING, errors="replace").strip()
 
 
 def write_response(path: Path, speaker: str, direction: str, translated_text: str) -> None:
-    path.write_text(
-        f"speaker={speaker}\ndirection={direction}\ntranslated={translated_text}\n",
-        encoding="utf-8",
-        errors="replace",
-    )
+    response = f"speaker={speaker}\ndirection={direction}\ntranslated={translated_text}\n"
+    path.write_bytes(response.encode(BRIDGE_ENCODING, errors="replace"))
 
 
 def watch(client_root: Path) -> None:
