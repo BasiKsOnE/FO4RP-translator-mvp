@@ -2197,6 +2197,42 @@ string ClientTranslationExtractServerNearShoutText( string& message )
 		message.length() - prefix.length() - suffix.length() );
 }
 
+bool ClientTranslationIsServerFarShout( string& message )
+{
+	string prefix = "???: |0x00FF0000 !!! ";
+	string suffix = " !!!";
+
+	if( !ClientTranslationHasWholeDisplayWrapper( message, prefix, suffix ) )
+	{
+		return false;
+	}
+
+	string innerPayload = substring(
+		message,
+		prefix.length(),
+		message.length() - prefix.length() - suffix.length() );
+
+	return innerPayload.length() > 4 &&
+	       ClientTranslationHasWholeDisplayWrapper( innerPayload, "++", "++" );
+}
+
+string ClientTranslationExtractServerFarShoutText( string& message )
+{
+	if( !ClientTranslationIsServerFarShout( message ) )
+	{
+		return "";
+	}
+
+	string prefix = "???: |0x00FF0000 !!! ";
+	string suffix = " !!!";
+	string innerPayload = substring(
+		message,
+		prefix.length(),
+		message.length() - prefix.length() - suffix.length() );
+
+	return substring( innerPayload, 2, innerPayload.length() - 4 );
+}
+
 string ClientTranslationSyncInputText( string& originalMessage )
 {
 	string nearShoutText = ClientTranslationExtractServerNearShoutText( originalMessage );
@@ -2285,28 +2321,33 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		}
 	}
 
-    if( sayType > SAY_RADIO )
-	{
-		ClientTranslationTraceIncoming(
-			originalBridgeMessage,
-			message,
-			sayType,
-			critterId,
-			delay,
-			traceDirection,
-			traceMode,
-			syncMutationHappened );
-		return true;
-	}
 
+	bool isServerFarShout = sayType == SAY_NETMSG &&
+	                        ClientTranslationIsServerFarShout( message );
+	bool isOrdinarySyncMessage = critterId != 0 &&
+	                             sayType <= SAY_WHISP_ON_HEAD;
 
-	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
+	if( !isTranslationBridge && ( isOrdinarySyncMessage || isServerFarShout ) )
 	{
 		traceDirection = ClientTranslationLooksHighByte( message ) ? "ru_to_en" : "en_to_ru";
 		traceMode = ClientTranslationMode( traceDirection );
 
 		string clientTranslationDirection = "";
-		bool shouldSyncTranslate = ShouldClientTranslateIncoming( message, sayType, clientTranslationDirection );
+		bool shouldSyncTranslate = false;
+
+		if( isServerFarShout )
+		{
+			clientTranslationDirection = traceDirection;
+			shouldSyncTranslate = traceMode > 0;
+		}
+		else
+		{
+			shouldSyncTranslate = ShouldClientTranslateIncoming(
+				message,
+				sayType,
+				clientTranslationDirection );
+		}
+
 		bool hasServerNearShoutWrapper = ClientTranslationIsServerNearShout( message );
 
 		if( !shouldSyncTranslate &&
@@ -2318,12 +2359,37 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 			shouldSyncTranslate = true;
 		}
 
-		string normalizedClientTranslationText = ClientTranslationSyncInputText( message );
+		string normalizedClientTranslationText = "";
+		if( isServerFarShout )
+		{
+			normalizedClientTranslationText =
+				ClientTranslationExtractServerFarShoutText( message );
+		}
+		else
+		{
+			normalizedClientTranslationText =
+				ClientTranslationSyncInputText( message );
+		}
 
 		if( shouldSyncTranslate && normalizedClientTranslationText.length() > 0 )
 		{
 			string translatedClientMessage = ClientTranslateSync( clientTranslationDirection, normalizedClientTranslationText );
-			string translatedDisplayMessage = ClientTranslationReapplyDisplayMarkup( message, translatedClientMessage );
+			string translatedDisplayMessage = "";
+			if( isServerFarShout )
+			{
+				translatedDisplayMessage =
+					"???: |0x00FF0000 !!! ++" +
+					translatedClientMessage +
+					"++ !!!";
+			}
+			else
+			{
+				translatedDisplayMessage =
+					ClientTranslationReapplyDisplayMarkup(
+						message,
+						translatedClientMessage );
+			}
+
 			int clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
 			if( clientTranslationMode == 1 )
 			{
@@ -2338,6 +2404,21 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		}
 
 	}
+
+    if( sayType > SAY_RADIO )
+	{
+		ClientTranslationTraceIncoming(
+			originalBridgeMessage,
+			message,
+			sayType,
+			critterId,
+			delay,
+			traceDirection,
+			traceMode,
+			syncMutationHappened );
+		return true;
+	}
+
 	if( !isTranslationBridge )
 	{
 		ClientFileBridgeQueueIncoming( originalBridgeMessage, sayType, critterId );
