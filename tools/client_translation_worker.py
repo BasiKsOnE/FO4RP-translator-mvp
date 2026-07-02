@@ -92,8 +92,21 @@ def read_text_file(path: Path) -> str | None:
     return path.read_bytes().decode(BRIDGE_ENCODING, errors="replace").strip()
 
 
-def write_response(path: Path, speaker: str, direction: str, translated_text: str) -> None:
-    response = f"speaker={speaker}\ndirection={direction}\ntranslated={translated_text}\n"
+def write_response(
+    path: Path,
+    speaker: str,
+    critter_id: str,
+    say_type: str,
+    direction: str,
+    translated_text: str,
+) -> None:
+    response = (
+        f"speaker={speaker}\n"
+        f"critter_id={critter_id}\n"
+        f"say_type={say_type}\n"
+        f"direction={direction}\n"
+        f"translated={translated_text}\n"
+    )
     path.write_bytes(response.encode(BRIDGE_ENCODING, errors="replace"))
 
 
@@ -132,13 +145,15 @@ def watch(client_root: Path) -> None:
             print(f"Request read: {request_text}")
             request = parse_record(request_text)
             speaker = request.get("speaker", "Test")
+            critter_id = request.get("critter_id", "")
+            say_type = request.get("say_type", "")
             direction = request.get("direction", "")
             text = request.get("text", "")
             translation_start = time.perf_counter()
             response_text = translate_text(direction, text)
             translation_elapsed = time.perf_counter() - translation_start
             print(f"Translation time: {translation_elapsed:.3f}s")
-            write_response(response_path, speaker, direction, response_text)
+            write_response(response_path, speaker, critter_id, say_type, direction, response_text)
             print(f"Response written: {response_path}: {response_text}")
 
         time.sleep(POLL_SECONDS)

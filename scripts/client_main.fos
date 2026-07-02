@@ -68,8 +68,9 @@ import void CreateEconomyList() from "client_craft_economy";
 import void qmap_iface() from "qmap_client";
 import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
 
-bool ClientTranslateEnRu = false;
-bool ClientTranslateRuEn = false;
+int ClientTranslateEnRuMode = 0;
+int ClientTranslateRuEnMode = 0;
+bool ClientTranslationTraceEnabled = false;
 
 import void InputBoxKeyPressed( uint8 key ) from "client_screen_inputbox";
 import void InputBoxClipboardInsert()  from "client_screen_inputbox";
@@ -481,6 +482,8 @@ bool ClientFileBridgeQueueIncoming( string& message, int sayType, uint critterId
 	}
 
 	requestFile.writeString( "speaker=" + speaker + "\n" );
+	requestFile.writeString( "critter_id=" + critterId + "\n" );
+	requestFile.writeString( "say_type=" + sayType + "\n" );
 	requestFile.writeString( "direction=" + direction + "\n" );
 	requestFile.writeString( "raw_text=" + message + "\n" );
 	requestFile.writeString( "text=" + normalizedText + "\n" );
@@ -489,6 +492,27 @@ bool ClientFileBridgeQueueIncoming( string& message, int sayType, uint critterId
 	ClientFileBridgeNextRequestId += 1;
 	return true;
 }
+string ClientFileBridgeFormatTranslatedMessage( string speaker, int sayType, string translated )
+{
+	// Late chat-log styling only; this does not reconstruct native overhead bubbles.
+	if( sayType == SAY_WHISP || sayType == SAY_WHISP_ON_HEAD )
+	{
+		return "[TL whisper] " + speaker + ": ..." + translated + "...";
+	}
+
+	if( sayType == SAY_SHOUT || sayType == SAY_SHOUT_ON_HEAD )
+	{
+		return "[TL shout] " + speaker + ": ++" + translated + "++";
+	}
+
+	if( sayType == SAY_EMOTE || sayType == SAY_EMOTE_ON_HEAD )
+	{
+		return "[TL emote] *" + speaker + " " + translated + "*";
+	}
+
+	return "[TL] " + speaker + ": " + translated;
+}
+
 void ClientFileBridgePollResponses()
 {
 	uint now = GetTick();
@@ -514,6 +538,7 @@ void ClientFileBridgePollResponses()
 	responseFile.close();
 
 	string speaker = ClientFileBridgeValue( response, "speaker" );
+	string sayTypeText = ClientFileBridgeValue( response, "say_type" );
 	string translated = ClientFileBridgeValue( response, "translated" );
 	if( speaker.length() == 0 )
 	{
@@ -522,7 +547,9 @@ void ClientFileBridgePollResponses()
 
 	if( translated.length() > 0 )
 	{
-		Message( "[TL] " + speaker + ": " + translated );
+		int responseSayType = SAY_NORM;
+		StrToInt( sayTypeText, responseSayType );
+		Message( ClientFileBridgeFormatTranslatedMessage( speaker, responseSayType, translated ) );
 		ClientFileBridgeNextResponseId += 1;
 	}
 }
@@ -2025,12 +2052,12 @@ bool ShouldClientTranslateIncoming( string& message, int sayType, string& direct
 	}
 
 	bool probablyRu = ClientTranslationLooksHighByte( message );
-	if( probablyRu && ClientTranslateRuEn )
+	if( probablyRu && ClientTranslateRuEnMode > 0 )
 	{
 		direction = "ru_to_en";
 		return true;
 	}
-	if( !probablyRu && ClientTranslateEnRu )
+	if( !probablyRu && ClientTranslateEnRuMode > 0 )
 	{
 		direction = "en_to_ru";
 		return true;
@@ -2042,16 +2069,184 @@ bool TranslateChatSync( string& direction, string& input, string& output )
 {
 	if( direction == "en_to_ru" )
 	{
-		output = "[RU CLIENT TEST] " + input;
+		output = "[RU SYNC TEST] " + input;
 		return true;
 	}
 	if( direction == "ru_to_en" )
 	{
-		output = "[EN CLIENT TEST] " + input;
+		output = "[EN SYNC TEST] " + input;
 		return true;
 	}
 	output = input;
 	return false;
+}
+
+int ClientTranslationMode( string& direction )
+{
+	if( direction == "en_to_ru" )
+	{
+		return ClientTranslateEnRuMode;
+	}
+	if( direction == "ru_to_en" )
+	{
+		return ClientTranslateRuEnMode;
+	}
+	return 0;
+}
+
+string ClientTranslationTracePreview( string text )
+{
+	uint limit = text.length();
+	if( limit > 80 )
+	{
+		limit = 80;
+	}
+
+	string preview = "";
+	for( uint i = 0; i < limit; i++ )
+	{
+		if( text[i] == 10 || text[i] == 13 )
+		{
+			preview += " ";
+		}
+		else if( text[i] == '|' )
+		{
+			preview += "<pipe>";
+		}
+		else
+		{
+			preview += substring( text, i, 1 );
+		}
+	}
+
+	if( text.length() > limit )
+	{
+		preview += "...";
+	}
+	return preview;
+}
+
+void ClientTranslationTraceIncoming(
+	string& originalMessage,
+	string& finalMessage,
+	int sayType,
+	uint critterId,
+	uint delay,
+	string direction,
+	int mode,
+	bool syncMutationHappened )
+{
+	if( !ClientTranslationTraceEnabled )
+	{
+		return;
+	}
+
+	if( direction.length() == 0 )
+	{
+		direction = "-";
+	}
+
+	string changed = syncMutationHappened ? "1" : "0";
+	Message(
+		"[TL TRACE] sayType=" + sayType +
+		" critter=" + critterId +
+		" delay=" + delay +
+		" dir=" + direction +
+		" mode=" + mode +
+		" changed=" + changed +
+		" original=\"" + ClientTranslationTracePreview( originalMessage ) +
+		"\" final=\"" + ClientTranslationTracePreview( finalMessage ) + "\"" );
+}
+
+bool ClientTranslationHasWholeDisplayWrapper( string& message, string prefix, string suffix )
+{
+	uint prefixLength = prefix.length();
+	uint suffixLength = suffix.length();
+	uint messageLength = message.length();
+
+	if( messageLength < prefixLength + suffixLength )
+	{
+		return false;
+	}
+
+	return substring( message, 0, prefixLength ) == prefix &&
+	       substring( message, messageLength - suffixLength, suffixLength ) == suffix;
+}
+
+bool ClientTranslationIsServerNearShout( string& message )
+{
+	string prefix = "|0xFF0000 !!!++";
+	string suffix = "++!!!";
+
+	return message.length() > prefix.length() + suffix.length() &&
+	       ClientTranslationHasWholeDisplayWrapper( message, prefix, suffix );
+}
+
+string ClientTranslationExtractServerNearShoutText( string& message )
+{
+	if( !ClientTranslationIsServerNearShout( message ) )
+	{
+		return "";
+	}
+
+	string prefix = "|0xFF0000 !!!++";
+	string suffix = "++!!!";
+	return substring(
+		message,
+		prefix.length(),
+		message.length() - prefix.length() - suffix.length() );
+}
+
+string ClientTranslationSyncInputText( string& originalMessage )
+{
+	string nearShoutText = ClientTranslationExtractServerNearShoutText( originalMessage );
+	if( nearShoutText.length() > 0 )
+	{
+		return nearShoutText;
+	}
+
+	string normalizedText = ClientFileBridgeNormalizeText( originalMessage );
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "*", "*" ) &&
+	    normalizedText.length() >= 2 )
+	{
+		return substring( normalizedText, 1, normalizedText.length() - 2 );
+	}
+
+	return normalizedText;
+}
+
+string ClientTranslationReapplyDisplayMarkup( string& originalMessage, string& translatedText )
+{
+	if( ClientTranslationIsServerNearShout( originalMessage ) )
+	{
+		return "|0xFF0000 !!!++" + translatedText + "++!!!";
+	}
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "--", "--" ) )
+	{
+		return "--" + translatedText + "--";
+	}
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "++", "++" ) )
+	{
+		return "++" + translatedText + "++";
+	}
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "*", "*" ) )
+	{
+		return "*" + translatedText + "*";
+	}
+
+	uint volumeMarkerEnd = 0;
+	if( ClientFileBridgeIsValidVolumeMarker( originalMessage, 0, volumeMarkerEnd ) &&
+	    volumeMarkerEnd < originalMessage.length() &&
+	    originalMessage[volumeMarkerEnd] == ' ' )
+	{
+		return substring( originalMessage, 0, volumeMarkerEnd ) + " " + translatedText;
+	}
+
+	return translatedText;
 }
 
 string ClientTranslateSync( string& direction, string& text )
@@ -2074,6 +2269,9 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 	}
 	
 	string originalBridgeMessage = message;
+	string traceDirection = "";
+	int traceMode = 0;
+	bool syncMutationHappened = false;
 
 	CritterCl@ receiver = GetChosen();
 	string bridgeDirection = "";
@@ -2089,22 +2287,71 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 
     if( sayType > SAY_RADIO )
 	{
+		ClientTranslationTraceIncoming(
+			originalBridgeMessage,
+			message,
+			sayType,
+			critterId,
+			delay,
+			traceDirection,
+			traceMode,
+			syncMutationHappened );
 		return true;
 	}
 
 
 	if( !isTranslationBridge && critterId != 0 && sayType <= SAY_WHISP_ON_HEAD )
 	{
+		traceDirection = ClientTranslationLooksHighByte( message ) ? "ru_to_en" : "en_to_ru";
+		traceMode = ClientTranslationMode( traceDirection );
+
 		string clientTranslationDirection = "";
-		if( ShouldClientTranslateIncoming( message, sayType, clientTranslationDirection ) )
+		bool shouldSyncTranslate = ShouldClientTranslateIncoming( message, sayType, clientTranslationDirection );
+		bool hasServerNearShoutWrapper = ClientTranslationIsServerNearShout( message );
+
+		if( !shouldSyncTranslate &&
+		    sayType == SAY_NORM &&
+		    hasServerNearShoutWrapper &&
+		    traceMode > 0 )
 		{
-			message = ClientTranslateSync( clientTranslationDirection, message );
+			clientTranslationDirection = traceDirection;
+			shouldSyncTranslate = true;
 		}
+
+		string normalizedClientTranslationText = ClientTranslationSyncInputText( message );
+
+		if( shouldSyncTranslate && normalizedClientTranslationText.length() > 0 )
+		{
+			string translatedClientMessage = ClientTranslateSync( clientTranslationDirection, normalizedClientTranslationText );
+			string translatedDisplayMessage = ClientTranslationReapplyDisplayMarkup( message, translatedClientMessage );
+			int clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
+			if( clientTranslationMode == 1 )
+			{
+				message = translatedDisplayMessage;
+				syncMutationHappened = true;
+			}
+			else if( clientTranslationMode == 2 )
+			{
+				message += "\n" + translatedDisplayMessage;
+				syncMutationHappened = true;
+			}
+		}
+
 	}
 	if( !isTranslationBridge )
 	{
 		ClientFileBridgeQueueIncoming( originalBridgeMessage, sayType, critterId );
 	}
+
+	ClientTranslationTraceIncoming(
+		originalBridgeMessage,
+		message,
+		sayType,
+		critterId,
+		delay,
+		traceDirection,
+		traceMode,
+		syncMutationHappened );
 
     if(!InMessage(message, sayType, critterId, delay))
 	{
@@ -2324,56 +2571,83 @@ bool out_command( string& message, int& sayType )
 			Message( "File bridge incoming: OFF" );
 			return false;
 		}
+		if( message == "~tl_trace 1" )
+		{
+			ClientTranslationTraceEnabled = true;
+			Message( "Translation trace: ON" );
+			return false;
+		}
+
+		if( message == "~tl_trace 0" )
+		{
+			ClientTranslationTraceEnabled = false;
+			Message( "Translation trace: OFF" );
+			return false;
+		}
+
 		string@[]@ parts = split( message, " " );
 
 
 		if( parts[0] == "~enru" || parts[0] == "~ruen" )
 		{
-			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" ) )
+			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" && parts[1] != "2" ) )
 			{
-				Message( "Usage: ~enru 1" );
 				Message( "Usage: ~enru 0" );
-				Message( "Usage: ~ruen 1" );
+				Message( "Usage: ~enru 1" );
+				Message( "Usage: ~enru 2" );
 				Message( "Usage: ~ruen 0" );
+				Message( "Usage: ~ruen 1" );
+				Message( "Usage: ~ruen 2" );
 				return false;
 			}
 
-			int enabled = 0;
-			if( !StrToInt( parts[1], enabled ) )
+			int mode = 0;
+			if( !StrToInt( parts[1], mode ) )
 			{
-				Message( "Usage: ~enru 1" );
 				Message( "Usage: ~enru 0" );
-				Message( "Usage: ~ruen 1" );
+				Message( "Usage: ~enru 1" );
+				Message( "Usage: ~enru 2" );
 				Message( "Usage: ~ruen 0" );
+				Message( "Usage: ~ruen 1" );
+				Message( "Usage: ~ruen 2" );
 				return false;
 			}
 
 			if( parts[0] == "~enru" )
 			{
-				ClientTranslateEnRu = enabled != 0;
-				if( ClientTranslateEnRu )
+				ClientTranslateEnRuMode = mode;
+				if( ClientTranslateEnRuMode == 0 )
 				{
-					Message( "EN->RU client translation: ON" );
+					Message( "EN->RU client translation: OFF" );
+				}
+				else if( ClientTranslateEnRuMode == 1 )
+				{
+					Message( "EN->RU client translation: translated only" );
 				}
 				else
 				{
-					Message( "EN->RU client translation: OFF" );
+					Message( "EN->RU client translation: source and translation" );
 				}
 			}
 			else
 			{
-				ClientTranslateRuEn = enabled != 0;
-				if( ClientTranslateRuEn )
+				ClientTranslateRuEnMode = mode;
+				if( ClientTranslateRuEnMode == 0 )
 				{
-					Message( "RU->EN client translation: ON" );
+					Message( "RU->EN client translation: OFF" );
+				}
+				else if( ClientTranslateRuEnMode == 1 )
+				{
+					Message( "RU->EN client translation: translated only" );
 				}
 				else
 				{
-					Message( "RU->EN client translation: OFF" );
+					Message( "RU->EN client translation: source and translation" );
 				}
 			}
 			return false;
 		}
+
 
 		if( parts[0] == "~name" ) 
 		{
