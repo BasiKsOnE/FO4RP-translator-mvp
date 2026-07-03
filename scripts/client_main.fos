@@ -8108,8 +8108,9 @@ void ShowNarrativeMessage( int hx, int hy, int isGM, string@ text, int[]@ )
 	{
 		return;
 	}
-	
-	int len = text.length();
+
+	string originalText = text;
+	int len = originalText.length();
 	if( len < 1 )
 	{
 		return;
@@ -8120,10 +8121,50 @@ void ShowNarrativeMessage( int hx, int hy, int isGM, string@ text, int[]@ )
 		return;
 	}
 
+	string direction = ClientTranslationLooksHighByte( originalText ) ?
+		"ru_to_en" :
+		"en_to_ru";
+	int mode = ClientTranslationMode( direction );
+	string displayText = originalText;
+	bool changed = false;
+
+	if( mode > 0 )
+	{
+		string translatedText = ClientTranslateSync( direction, originalText );
+		if( translatedText.length() > 0 && translatedText != originalText )
+		{
+			if( mode == 1 )
+			{
+				displayText = translatedText;
+				changed = true;
+			}
+			else if( mode == 2 )
+			{
+				displayText = originalText + "\n" + translatedText;
+				changed = true;
+			}
+		}
+	}
+
+	if( ClientTranslationTraceEnabled )
+	{
+		string changedText = changed ? "1" : "0";
+		Message(
+			"[TL NARRATIVE TRACE] x=" + hx +
+			" y=" + hy +
+			" gm=" + isGM +
+			" dir=" + direction +
+			" mode=" + mode +
+			" changed=" + changedText +
+			" original=\"" + ClientTranslationTracePreview( originalText ) +
+			"\" final=\"" + ClientTranslationTracePreview( displayText ) + "\"" );
+	}
+
+	len = displayText.length();
 	uint time = __TextDelay + len * 1000;
 	uint color = isGM != 0 ? COLOR_GRAY : COLOR_LGRAY;
-	MapMessage( text, uint16(hx), uint16(hy), time, color, true, 0, 0 );
-	Message( (isGM != 0 ? "|0x7F7F7F " : "|0xABABAB " ) + text, SAY_NETMSG );
+	MapMessage( displayText, uint16(hx), uint16(hy), time, color, true, 0, 0 );
+	Message( (isGM != 0 ? "|0x7F7F7F " : "|0xABABAB " ) + displayText, SAY_NETMSG );
 }
 
 void ShowTranslationBridgeMessage( int speakerId, int sayType, int, string@ text, int[]@ )
