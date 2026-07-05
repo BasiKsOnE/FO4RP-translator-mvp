@@ -571,6 +571,13 @@ uint loop()
 			
 		if( !last_radio_message_recieved )
 		{
+			if( ClientTranslationTraceEnabled )
+			{
+				Message(
+					"[TL RADIO TRACE] path=last_radio action=consume" +
+					" pending=1 message=\"" +
+					ClientTranslationTracePreview( last_radio_message ) + "\"" );
+			}
 			Message( "|0xFFFFFF " + last_radio_message );
 			last_radio_message_recieved = true;
 		}
@@ -1879,8 +1886,18 @@ bool map_message( string& message, uint16& hexX, uint16& hexY, uint& color, uint
 	string originalBridgeMessage = message;
 
     // Detect radio
-    if( color == 0xFFFFFFFE )
+    if( color == COLOR_CHAT_RADIO )
 	{
+		string radioLastBefore = last_radio_message;
+		bool radioReceivedBefore = last_radio_message_recieved;
+		string radioDirection = "";
+		int radioMode = 0;
+		bool radioSyncMutationHappened =
+			ClientTranslationApplyRadioPayload(
+				message,
+				radioDirection,
+				radioMode );
+
         MapMessage(message, hexX, hexY, color, delay);
         message = ".." + message + "..";
 		
@@ -1895,6 +1912,33 @@ bool map_message( string& message, uint16& hexX, uint16& hexY, uint& color, uint
 				last_radio_message_recieved = false;
 			}
 			last_radio_message = message;
+		}
+
+		if( ClientTranslationTraceEnabled )
+		{
+			string pendingBefore = radioReceivedBefore ? "0" : "1";
+			string pendingAfter = last_radio_message_recieved ? "0" : "1";
+			string radioChanged =
+				radioSyncMutationHappened ? "1" : "0";
+			Message(
+				"[TL RADIO TRACE] path=map_message" +
+				" x=" + hexX +
+				" y=" + hexY +
+				" color=" + color +
+				" delay=" + delay +
+				" pendingBefore=" + pendingBefore +
+				" pendingAfter=" + pendingAfter +
+				" dir=" + radioDirection +
+				" mode=" + radioMode +
+				" changed=" + radioChanged +
+				" original=\"" +
+				ClientTranslationTracePreview( originalBridgeMessage ) +
+				"\" final=\"" +
+				ClientTranslationTracePreview( message ) +
+				"\" lastBefore=\"" +
+				ClientTranslationTracePreview( radioLastBefore ) +
+				"\" lastAfter=\"" +
+				ClientTranslationTracePreview( last_radio_message ) + "\"" );
 		}
 	}
 		
@@ -2051,7 +2095,8 @@ bool ShouldClientTranslateIncoming( string& message, int sayType, string& direct
 		return false;
 	}
 
-	if( sayType > SAY_WHISP_ON_HEAD )
+	if( sayType > SAY_WHISP_ON_HEAD &&
+	    sayType != SAY_RADIO )
 	{
 		return false;
 	}
@@ -2129,6 +2174,23 @@ string ClientTranslationTracePreview( string text )
 		preview += "...";
 	}
 	return preview;
+}
+
+bool ClientTranslationLooksLikeGmRadioMonitor( string& message )
+{
+	string marker = ": |0xFFFFFFFF ...";
+	int markerPos = findFirst( message, marker );
+	if( markerPos <= 0 || message.length() < marker.length() + 3 )
+	{
+		return false;
+	}
+
+	if( substring( message, message.length() - 3, 3 ) != "..." )
+	{
+		return false;
+	}
+
+	return true;
 }
 
 void ClientTranslationTraceIncoming(
@@ -2299,6 +2361,57 @@ string ClientTranslateSync( string& direction, string& text )
 	}
 	return text;
 }
+
+bool ClientTranslationApplyRadioPayload(
+	string& message,
+	string& direction,
+	int& mode )
+{
+	direction =
+		ClientTranslationLooksHighByte( message ) ?
+		"ru_to_en" :
+		"en_to_ru";
+	mode = ClientTranslationMode( direction );
+
+	string selectedDirection = "";
+	if( !ShouldClientTranslateIncoming(
+		message,
+		SAY_RADIO,
+		selectedDirection ) )
+	{
+		return false;
+	}
+
+	direction = selectedDirection;
+	mode = ClientTranslationMode( direction );
+
+	string normalizedText =
+		ClientTranslationSyncInputText( message );
+	if( normalizedText.length() == 0 )
+	{
+		return false;
+	}
+
+	string translatedText =
+		ClientTranslateSync( direction, normalizedText );
+	string translatedDisplay =
+		ClientTranslationReapplyDisplayMarkup(
+			message,
+			translatedText );
+
+	if( mode == 1 )
+	{
+		message = translatedDisplay;
+		return true;
+	}
+	if( mode == 2 )
+	{
+		message += "\n" + translatedDisplay;
+		return true;
+	}
+
+	return false;
+}
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on receive message.
 // By default delay == [TextDelay + message length * 100] ms
@@ -2310,6 +2423,7 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 	}
 	
 	string originalBridgeMessage = message;
+	int originalIncomingSayType = sayType;
 	string traceDirection = "";
 	int traceMode = 0;
 	bool syncMutationHappened = false;
@@ -2331,8 +2445,19 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 	                        ClientTranslationIsServerFarShout( message );
 	bool isOrdinarySyncMessage = critterId != 0 &&
 	                             sayType <= SAY_WHISP_ON_HEAD;
+	bool isRadioSyncMessage =
+		originalIncomingSayType == SAY_RADIO;
 
-	if( !isTranslationBridge && ( isOrdinarySyncMessage || isServerFarShout ) )
+	if( !isTranslationBridge && isRadioSyncMessage )
+	{
+		syncMutationHappened =
+			ClientTranslationApplyRadioPayload(
+				message,
+				traceDirection,
+				traceMode );
+	}
+	else if( !isTranslationBridge &&
+	         ( isOrdinarySyncMessage || isServerFarShout ) )
 	{
 		traceDirection = ClientTranslationLooksHighByte( message ) ? "ru_to_en" : "en_to_ru";
 		traceMode = ClientTranslationMode( traceDirection );
@@ -2410,6 +2535,19 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 
 	}
 
+	if( ClientTranslationTraceEnabled &&
+	    originalIncomingSayType == SAY_NETMSG &&
+	    ClientTranslationLooksLikeGmRadioMonitor( originalBridgeMessage ) )
+	{
+		Message(
+			"[TL RADIO TRACE] path=gm_monitor_candidate" +
+			" sayType=" + originalIncomingSayType +
+			" critter=" + critterId +
+			" delay=" + delay +
+			" message=\"" +
+			ClientTranslationTracePreview( originalBridgeMessage ) + "\"" );
+	}
+
     if( sayType > SAY_RADIO )
 	{
 		ClientTranslationTraceIncoming(
@@ -2439,13 +2577,29 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		traceMode,
 		syncMutationHappened );
 
-    if(!InMessage(message, sayType, critterId, delay))
+	bool acceptedIncomingMessage =
+		InMessage( message, sayType, critterId, delay );
+    if( !acceptedIncomingMessage )
 	{
+		if( ClientTranslationTraceEnabled &&
+		    originalIncomingSayType == SAY_RADIO )
+		{
+			Message(
+				"[TL RADIO TRACE] path=in_message accepted=0" +
+				" sayType=" + originalIncomingSayType +
+				" critter=" + critterId +
+				" delay=" + delay +
+				" original=\"" +
+				ClientTranslationTracePreview( originalBridgeMessage ) + "\"" );
+		}
         return false;
     }
 
     if( sayType == SAY_RADIO )
 	{
+		string radioLastBefore = last_radio_message;
+		bool radioReceivedBefore = last_radio_message_recieved;
+
 		if( last_radio_message.length() != message.length() && findFirst( last_radio_message, message ) == -1 )
 		{
 			last_radio_message = ".." + message + "..";
@@ -2455,6 +2609,27 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 			last_radio_message_recieved = true;
 		}
 		
+		if( ClientTranslationTraceEnabled )
+		{
+			string pendingBefore = radioReceivedBefore ? "0" : "1";
+			string pendingAfter = last_radio_message_recieved ? "0" : "1";
+			Message(
+				"[TL RADIO TRACE] path=in_message accepted=1" +
+				" sayType=" + sayType +
+				" critter=" + critterId +
+				" delay=" + delay +
+				" pendingBefore=" + pendingBefore +
+				" pendingAfter=" + pendingAfter +
+				" original=\"" +
+				ClientTranslationTracePreview( originalBridgeMessage ) +
+				"\" final=\"" +
+				ClientTranslationTracePreview( message ) +
+				"\" lastBefore=\"" +
+				ClientTranslationTracePreview( radioLastBefore ) +
+				"\" lastAfter=\"" +
+				ClientTranslationTracePreview( last_radio_message ) + "\"" );
+		}
+
         return true;	// for work radio and service messages
 	}
 
@@ -2480,7 +2655,25 @@ bool out_message( string& message, int& sayType )
 		return false;
 	}
 
+	string originalOutgoingMessage = message;
+	int originalOutgoingSayType = sayType;
 	bool result = OutMessage(message, sayType);
+
+	if( ClientTranslationTraceEnabled &&
+	    ( originalOutgoingSayType == SAY_RADIO || sayType == SAY_RADIO ) )
+	{
+		string accepted = result ? "1" : "0";
+		Message(
+			"[TL RADIO TRACE] path=out_message" +
+			" accepted=" + accepted +
+			" sayTypeBefore=" + originalOutgoingSayType +
+			" sayTypeAfter=" + sayType +
+			" original=\"" +
+			ClientTranslationTracePreview( originalOutgoingMessage ) +
+			"\" final=\"" +
+			ClientTranslationTracePreview( message ) + "\"" );
+	}
+
     if(message == "")
 	{
 		return false;
