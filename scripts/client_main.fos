@@ -67,6 +67,9 @@ import void CreateEconomyList() from "client_craft_economy";
 
 import void qmap_iface() from "qmap_client";
 import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
+import void ClientTranslationSetAfkTraceEnabled( bool enabled ) from "client_names";
+import void ClientTranslationResetAfkTraceState( uint critterId ) from "client_names";
+import void ClientTranslationSetAfkModes( int enRuMode, int ruEnMode ) from "client_names";
 
 int ClientTranslateEnRuMode = 0;
 int ClientTranslateRuEnMode = 0;
@@ -1751,6 +1754,8 @@ void critter_in( CritterCl& cr )
 		return;
 	}
 
+	ClientTranslationResetAfkTraceState( cr.Id );
+
 	if(cr.IsChosen() && _MainScreen != CLIENT_MAIN_SCREEN_GLOBAL_MAP)
 	{
 		PlayAmbientSound();
@@ -1811,7 +1816,7 @@ void critter_in( CritterCl& cr )
 
 void critter_out( CritterCl& cr )
 {
-	
+	ClientTranslationResetAfkTraceState( cr.Id );
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2655,6 +2660,7 @@ bool out_command( string& message, int& sayType )
 		if( message == "~tl_trace 1" )
 		{
 			ClientTranslationTraceEnabled = true;
+			ClientTranslationSetAfkTraceEnabled( true );
 			Message( "Translation trace: ON" );
 			return false;
 		}
@@ -2662,6 +2668,7 @@ bool out_command( string& message, int& sayType )
 		if( message == "~tl_trace 0" )
 		{
 			ClientTranslationTraceEnabled = false;
+			ClientTranslationSetAfkTraceEnabled( false );
 			Message( "Translation trace: OFF" );
 			return false;
 		}
@@ -2726,6 +2733,8 @@ bool out_command( string& message, int& sayType )
 					Message( "RU->EN client translation: source and translation" );
 				}
 			}
+
+			ClientTranslationSetAfkModes( ClientTranslateEnRuMode, ClientTranslateRuEnMode );
 			return false;
 		}
 
