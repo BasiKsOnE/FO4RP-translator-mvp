@@ -55,6 +55,7 @@
 # ifdef __CLIENT
 // =============== CLIENT: SCRIPTING API EXTENSION ===============
 # pragma bindfunc "uint GetAllItems(ItemCl@[]@+ items) -> rust_dll/client.dll GetAllItems"
+# pragma bindfunc "string@ NativeTranslationEcho(string&) -> rust_dll/client.dll NativeTranslationEcho"
 
 // =============== CLIENT: OPEN LINK ===============
 # pragma bindfunc "void OpenLink(string&) -> rust_dll/client.dll open_link"

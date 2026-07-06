@@ -2824,6 +2824,32 @@ bool out_command( string& message, int& sayType )
 			}
 			return false;
 		}
+		if( message == "~tl_native_echo" ||
+			findFirst( message, "~tl_native_echo " ) == 0 )
+		{
+			string nativeEchoCommand = "~tl_native_echo";
+			uint nativeEchoTextStart = nativeEchoCommand.length() + 1;
+			if( message.length() <= nativeEchoTextStart )
+			{
+				Message( "[NATIVE ECHO ERROR]" );
+				return false;
+			}
+
+			string nativeEchoInput = substring(
+				message,
+				nativeEchoTextStart,
+				message.length() - nativeEchoTextStart );
+			string@ nativeEchoOutput = NativeTranslationEcho( nativeEchoInput );
+			if( valid( nativeEchoOutput ) )
+			{
+				Message( "[NATIVE ECHO] " + nativeEchoOutput );
+			}
+			else
+			{
+				Message( "[NATIVE ECHO ERROR]" );
+			}
+			return false;
+		}
 		if( message == "~file_bridge_test" )
 		{
 			uint requestId = ClientFileBridgeNextRequestId;
