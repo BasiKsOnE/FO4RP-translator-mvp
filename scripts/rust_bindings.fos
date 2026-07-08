@@ -57,6 +57,7 @@
 # pragma bindfunc "uint GetAllItems(ItemCl@[]@+ items) -> rust_dll/client.dll GetAllItems"
 # pragma bindfunc "string@ NativeTranslationEcho(string&) -> rust_dll/client.dll NativeTranslationEcho"
 # pragma bindfunc "string@ NativeTranslationTcpEcho(string&) -> rust_dll/client.dll NativeTranslationTcpEcho"
+# pragma bindfunc "string@ NativeTranslationTcpTranslate(string&) -> rust_dll/client.dll NativeTranslationTcpTranslate"
 
 // =============== CLIENT: OPEN LINK ===============
 # pragma bindfunc "void OpenLink(string&) -> rust_dll/client.dll open_link"

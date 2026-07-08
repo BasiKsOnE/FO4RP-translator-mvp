@@ -2362,6 +2362,16 @@ string ClientTranslateSync( string& direction, string& text )
 	return text;
 }
 
+string ClientTranslateTcpSync( string& text )
+{
+	string@ translated = NativeTranslationTcpTranslate( text );
+	if( valid( translated ) )
+	{
+		return translated;
+	}
+	return "";
+}
+
 bool ClientTranslationApplyRadioPayload(
 	string& message,
 	string& direction,
@@ -2372,6 +2382,11 @@ bool ClientTranslationApplyRadioPayload(
 		"ru_to_en" :
 		"en_to_ru";
 	mode = ClientTranslationMode( direction );
+
+	if( mode == 3 )
+	{
+		return false;
+	}
 
 	string selectedDirection = "";
 	if( !ShouldClientTranslateIncoming(
@@ -2427,6 +2442,7 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 	string traceDirection = "";
 	int traceMode = 0;
 	bool syncMutationHappened = false;
+	bool skipAsyncTranslation = false;
 
 	CritterCl@ receiver = GetChosen();
 	string bridgeDirection = "";
@@ -2501,35 +2517,74 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 				ClientTranslationSyncInputText( message );
 		}
 
+		int clientTranslationMode = 0;
+		if( shouldSyncTranslate )
+		{
+			clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
+			if( clientTranslationMode == 3 )
+			{
+				skipAsyncTranslation = true;
+			}
+		}
+
 		if( shouldSyncTranslate && normalizedClientTranslationText.length() > 0 )
 		{
-			string translatedClientMessage = ClientTranslateSync( clientTranslationDirection, normalizedClientTranslationText );
-			string translatedDisplayMessage = "";
-			if( isServerFarShout )
+			if( clientTranslationMode == 3 )
 			{
-				translatedDisplayMessage =
-					"???: |0x00FF0000 !!! ++" +
-					translatedClientMessage +
-					"++ !!!";
+				string translatedClientMessage =
+					ClientTranslateTcpSync(
+						normalizedClientTranslationText );
+				if( translatedClientMessage.length() > 0 )
+				{
+					string translatedDisplayMessage = "";
+					if( isServerFarShout )
+					{
+						translatedDisplayMessage =
+							"???: |0x00FF0000 !!! ++" +
+							translatedClientMessage +
+							"++ !!!";
+					}
+					else
+					{
+						translatedDisplayMessage =
+							ClientTranslationReapplyDisplayMarkup(
+								message,
+								translatedClientMessage );
+					}
+
+					message = translatedDisplayMessage;
+					syncMutationHappened = true;
+				}
 			}
 			else
 			{
-				translatedDisplayMessage =
-					ClientTranslationReapplyDisplayMarkup(
-						message,
-						translatedClientMessage );
-			}
+				string translatedClientMessage = ClientTranslateSync( clientTranslationDirection, normalizedClientTranslationText );
+				string translatedDisplayMessage = "";
+				if( isServerFarShout )
+				{
+					translatedDisplayMessage =
+						"???: |0x00FF0000 !!! ++" +
+						translatedClientMessage +
+						"++ !!!";
+				}
+				else
+				{
+					translatedDisplayMessage =
+						ClientTranslationReapplyDisplayMarkup(
+							message,
+							translatedClientMessage );
+				}
 
-			int clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
-			if( clientTranslationMode == 1 )
-			{
-				message = translatedDisplayMessage;
-				syncMutationHappened = true;
-			}
-			else if( clientTranslationMode == 2 )
-			{
-				message += "\n" + translatedDisplayMessage;
-				syncMutationHappened = true;
+				if( clientTranslationMode == 1 )
+				{
+					message = translatedDisplayMessage;
+					syncMutationHappened = true;
+				}
+				else if( clientTranslationMode == 2 )
+				{
+					message += "\n" + translatedDisplayMessage;
+					syncMutationHappened = true;
+				}
 			}
 		}
 
@@ -2562,7 +2617,7 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		return true;
 	}
 
-	if( !isTranslationBridge )
+	if( !isTranslationBridge && !skipAsyncTranslation )
 	{
 		ClientFileBridgeQueueIncoming( originalBridgeMessage, sayType, critterId );
 	}
@@ -2924,14 +2979,16 @@ bool out_command( string& message, int& sayType )
 
 		if( parts[0] == "~enru" || parts[0] == "~ruen" )
 		{
-			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" && parts[1] != "2" ) )
+			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" && parts[1] != "2" && parts[1] != "3" ) )
 			{
 				Message( "Usage: ~enru 0" );
 				Message( "Usage: ~enru 1" );
 				Message( "Usage: ~enru 2" );
+				Message( "Usage: ~enru 3" );
 				Message( "Usage: ~ruen 0" );
 				Message( "Usage: ~ruen 1" );
 				Message( "Usage: ~ruen 2" );
+				Message( "Usage: ~ruen 3" );
 				return false;
 			}
 
@@ -2941,9 +2998,11 @@ bool out_command( string& message, int& sayType )
 				Message( "Usage: ~enru 0" );
 				Message( "Usage: ~enru 1" );
 				Message( "Usage: ~enru 2" );
+				Message( "Usage: ~enru 3" );
 				Message( "Usage: ~ruen 0" );
 				Message( "Usage: ~ruen 1" );
 				Message( "Usage: ~ruen 2" );
+				Message( "Usage: ~ruen 3" );
 				return false;
 			}
 
@@ -2958,9 +3017,13 @@ bool out_command( string& message, int& sayType )
 				{
 					Message( "EN->RU client translation: translated only" );
 				}
-				else
+				else if( ClientTranslateEnRuMode == 2 )
 				{
 					Message( "EN->RU client translation: source and translation" );
+				}
+				else
+				{
+					Message( "EN->RU client translation: TCP translated only" );
 				}
 			}
 			else
@@ -2974,13 +3037,19 @@ bool out_command( string& message, int& sayType )
 				{
 					Message( "RU->EN client translation: translated only" );
 				}
-				else
+				else if( ClientTranslateRuEnMode == 2 )
 				{
 					Message( "RU->EN client translation: source and translation" );
 				}
+				else
+				{
+					Message( "RU->EN client translation: TCP translated only" );
+				}
 			}
 
-			ClientTranslationSetAfkModes( ClientTranslateEnRuMode, ClientTranslateRuEnMode );
+			int afkEnRuMode = ClientTranslateEnRuMode == 3 ? 0 : ClientTranslateEnRuMode;
+			int afkRuEnMode = ClientTranslateRuEnMode == 3 ? 0 : ClientTranslateRuEnMode;
+			ClientTranslationSetAfkModes( afkEnRuMode, afkRuEnMode );
 			return false;
 		}
 
@@ -8383,7 +8452,7 @@ void ShowNarrativeMessage( int hx, int hy, int isGM, string@ text, int[]@ )
 	string displayText = originalText;
 	bool changed = false;
 
-	if( mode > 0 )
+	if( mode == 1 || mode == 2 )
 	{
 		string translatedText = ClientTranslateSync( direction, originalText );
 		if( translatedText.length() > 0 && translatedText != originalText )
