@@ -2372,6 +2372,28 @@ string ClientTranslateTcpSync( string& text )
 	return "";
 }
 
+string ClientTranslateTcpArgosSync( string& direction, string& text )
+{
+	if( direction == "en_to_ru" )
+	{
+		string@ translated = NativeTranslationTcpArgosEnRu( text );
+		if( valid( translated ) )
+		{
+			return translated;
+		}
+		return "";
+	}
+	if( direction == "ru_to_en" )
+	{
+		string@ translated = NativeTranslationTcpArgosRuEn( text );
+		if( valid( translated ) )
+		{
+			return translated;
+		}
+	}
+	return "";
+}
+
 bool ClientTranslationApplyRadioPayload(
 	string& message,
 	string& direction,
@@ -2383,7 +2405,7 @@ bool ClientTranslationApplyRadioPayload(
 		"en_to_ru";
 	mode = ClientTranslationMode( direction );
 
-	if( mode == 3 )
+	if( mode == 3 || mode == 4 )
 	{
 		return false;
 	}
@@ -2521,7 +2543,8 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 		if( shouldSyncTranslate )
 		{
 			clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
-			if( clientTranslationMode == 3 )
+			if( clientTranslationMode == 3 ||
+			    clientTranslationMode == 4 )
 			{
 				skipAsyncTranslation = true;
 			}
@@ -2529,11 +2552,23 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 
 		if( shouldSyncTranslate && normalizedClientTranslationText.length() > 0 )
 		{
-			if( clientTranslationMode == 3 )
+			if( clientTranslationMode == 3 ||
+			    clientTranslationMode == 4 )
 			{
-				string translatedClientMessage =
-					ClientTranslateTcpSync(
-						normalizedClientTranslationText );
+				string translatedClientMessage = "";
+				if( clientTranslationMode == 3 )
+				{
+					translatedClientMessage =
+						ClientTranslateTcpSync(
+							normalizedClientTranslationText );
+				}
+				else
+				{
+					translatedClientMessage =
+						ClientTranslateTcpArgosSync(
+							clientTranslationDirection,
+							normalizedClientTranslationText );
+				}
 				if( translatedClientMessage.length() > 0 )
 				{
 					string translatedDisplayMessage = "";
@@ -2979,16 +3014,18 @@ bool out_command( string& message, int& sayType )
 
 		if( parts[0] == "~enru" || parts[0] == "~ruen" )
 		{
-			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" && parts[1] != "2" && parts[1] != "3" ) )
+			if( parts.length() != 2 || ( parts[1] != "0" && parts[1] != "1" && parts[1] != "2" && parts[1] != "3" && parts[1] != "4" ) )
 			{
 				Message( "Usage: ~enru 0" );
 				Message( "Usage: ~enru 1" );
 				Message( "Usage: ~enru 2" );
 				Message( "Usage: ~enru 3" );
+				Message( "Usage: ~enru 4" );
 				Message( "Usage: ~ruen 0" );
 				Message( "Usage: ~ruen 1" );
 				Message( "Usage: ~ruen 2" );
 				Message( "Usage: ~ruen 3" );
+				Message( "Usage: ~ruen 4" );
 				return false;
 			}
 
@@ -2999,10 +3036,12 @@ bool out_command( string& message, int& sayType )
 				Message( "Usage: ~enru 1" );
 				Message( "Usage: ~enru 2" );
 				Message( "Usage: ~enru 3" );
+				Message( "Usage: ~enru 4" );
 				Message( "Usage: ~ruen 0" );
 				Message( "Usage: ~ruen 1" );
 				Message( "Usage: ~ruen 2" );
 				Message( "Usage: ~ruen 3" );
+				Message( "Usage: ~ruen 4" );
 				return false;
 			}
 
@@ -3021,9 +3060,13 @@ bool out_command( string& message, int& sayType )
 				{
 					Message( "EN->RU client translation: source and translation" );
 				}
-				else
+				else if( ClientTranslateEnRuMode == 3 )
 				{
 					Message( "EN->RU client translation: TCP translated only" );
+				}
+				else
+				{
+					Message( "EN->RU client translation: TCP Argos translated only" );
 				}
 			}
 			else
@@ -3041,14 +3084,18 @@ bool out_command( string& message, int& sayType )
 				{
 					Message( "RU->EN client translation: source and translation" );
 				}
-				else
+				else if( ClientTranslateRuEnMode == 3 )
 				{
 					Message( "RU->EN client translation: TCP translated only" );
 				}
+				else
+				{
+					Message( "RU->EN client translation: TCP Argos translated only" );
+				}
 			}
 
-			int afkEnRuMode = ClientTranslateEnRuMode == 3 ? 0 : ClientTranslateEnRuMode;
-			int afkRuEnMode = ClientTranslateRuEnMode == 3 ? 0 : ClientTranslateRuEnMode;
+			int afkEnRuMode = ClientTranslateEnRuMode >= 3 ? 0 : ClientTranslateEnRuMode;
+			int afkRuEnMode = ClientTranslateRuEnMode >= 3 ? 0 : ClientTranslateRuEnMode;
 			ClientTranslationSetAfkModes( afkEnRuMode, afkRuEnMode );
 			return false;
 		}
