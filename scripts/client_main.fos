@@ -2850,6 +2850,33 @@ bool out_command( string& message, int& sayType )
 			}
 			return false;
 		}
+		if( message == "~tl_tcp_echo" ||
+			findFirst( message, "~tl_tcp_echo " ) == 0 )
+		{
+			string nativeTcpEchoCommand = "~tl_tcp_echo";
+			uint nativeTcpEchoTextStart = nativeTcpEchoCommand.length() + 1;
+			if( message.length() <= nativeTcpEchoTextStart )
+			{
+				Message( "[NATIVE TCP ECHO ERROR]" );
+				return false;
+			}
+
+			string nativeTcpEchoInput = substring(
+				message,
+				nativeTcpEchoTextStart,
+				message.length() - nativeTcpEchoTextStart );
+			string@ nativeTcpEchoOutput =
+				NativeTranslationTcpEcho( nativeTcpEchoInput );
+			if( valid( nativeTcpEchoOutput ) )
+			{
+				Message( "[NATIVE TCP ECHO] " + nativeTcpEchoOutput );
+			}
+			else
+			{
+				Message( "[NATIVE TCP ECHO ERROR]" );
+			}
+			return false;
+		}
 		if( message == "~file_bridge_test" )
 		{
 			uint requestId = ClientFileBridgeNextRequestId;
