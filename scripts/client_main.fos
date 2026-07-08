@@ -473,6 +473,12 @@ bool ClientFileBridgeQueueIncoming( string& message, int sayType, uint critterId
 	}
 
 	string direction = ClientTranslationLooksHighByte( normalizedText ) ? "ru_to_en" : "en_to_ru";
+	int directionMode = ClientTranslationMode( direction );
+	if( directionMode != 1 && directionMode != 2 )
+	{
+		return false;
+	}
+
 	string speaker = ClientFileBridgeSpeakerName( critterId );
 	uint requestId = ClientFileBridgeNextRequestId;
 
@@ -2394,6 +2400,19 @@ string ClientTranslateTcpArgosSync( string& direction, string& text )
 	return "";
 }
 
+string ClientTranslateTcpModeSync( int mode, string& direction, string& text )
+{
+	if( mode == 3 )
+	{
+		return ClientTranslateTcpSync( text );
+	}
+	if( mode == 4 )
+	{
+		return ClientTranslateTcpArgosSync( direction, text );
+	}
+	return "";
+}
+
 bool ClientTranslationApplyRadioPayload(
 	string& message,
 	string& direction,
@@ -2404,11 +2423,6 @@ bool ClientTranslationApplyRadioPayload(
 		"ru_to_en" :
 		"en_to_ru";
 	mode = ClientTranslationMode( direction );
-
-	if( mode == 3 || mode == 4 )
-	{
-		return false;
-	}
 
 	string selectedDirection = "";
 	if( !ShouldClientTranslateIncoming(
@@ -2429,14 +2443,31 @@ bool ClientTranslationApplyRadioPayload(
 		return false;
 	}
 
-	string translatedText =
-		ClientTranslateSync( direction, normalizedText );
+	string translatedText = "";
+	if( mode == 3 || mode == 4 )
+	{
+		translatedText =
+			ClientTranslateTcpModeSync(
+				mode,
+				direction,
+				normalizedText );
+		if( translatedText.length() == 0 )
+		{
+			return false;
+		}
+	}
+	else
+	{
+		translatedText =
+			ClientTranslateSync( direction, normalizedText );
+	}
+
 	string translatedDisplay =
 		ClientTranslationReapplyDisplayMarkup(
 			message,
 			translatedText );
 
-	if( mode == 1 )
+	if( mode == 1 || mode == 3 || mode == 4 )
 	{
 		message = translatedDisplay;
 		return true;
@@ -2493,6 +2524,10 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 				message,
 				traceDirection,
 				traceMode );
+		if( traceMode == 3 || traceMode == 4 )
+		{
+			skipAsyncTranslation = true;
+		}
 	}
 	else if( !isTranslationBridge &&
 	         ( isOrdinarySyncMessage || isServerFarShout ) )
@@ -2555,20 +2590,11 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 			if( clientTranslationMode == 3 ||
 			    clientTranslationMode == 4 )
 			{
-				string translatedClientMessage = "";
-				if( clientTranslationMode == 3 )
-				{
-					translatedClientMessage =
-						ClientTranslateTcpSync(
-							normalizedClientTranslationText );
-				}
-				else
-				{
-					translatedClientMessage =
-						ClientTranslateTcpArgosSync(
-							clientTranslationDirection,
-							normalizedClientTranslationText );
-				}
+				string translatedClientMessage =
+					ClientTranslateTcpModeSync(
+						clientTranslationMode,
+						clientTranslationDirection,
+						normalizedClientTranslationText );
 				if( translatedClientMessage.length() > 0 )
 				{
 					string translatedDisplayMessage = "";
@@ -3094,9 +3120,7 @@ bool out_command( string& message, int& sayType )
 				}
 			}
 
-			int afkEnRuMode = ClientTranslateEnRuMode >= 3 ? 0 : ClientTranslateEnRuMode;
-			int afkRuEnMode = ClientTranslateRuEnMode >= 3 ? 0 : ClientTranslateRuEnMode;
-			ClientTranslationSetAfkModes( afkEnRuMode, afkRuEnMode );
+			ClientTranslationSetAfkModes( ClientTranslateEnRuMode, ClientTranslateRuEnMode );
 			return false;
 		}
 

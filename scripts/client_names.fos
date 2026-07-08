@@ -5,6 +5,8 @@
 #include "client_names_h.fos"
 #include "client_gm_controls.fosh"
 
+#define CLIENT_TRANSLATION_AFK_RETRY_INTERVAL ( 2000 )
+
 int ClientTranslationAfkEnRuMode = 0;
 int ClientTranslationAfkRuEnMode = 0;
 bool ClientTranslationAfkTraceEnabled = false;
@@ -12,6 +14,7 @@ bool ClientTranslationAfkTraceEnabled = false;
 dictionary ClientTranslationAfkCacheSignature;
 dictionary ClientTranslationAfkCacheResult;
 dictionary ClientTranslationAfkCacheSuccess;
+dictionary ClientTranslationAfkCacheFailureTick;
 
 dictionary ClientTranslationAfkTraceActive;
 dictionary ClientTranslationAfkTraceText;
@@ -52,8 +55,22 @@ string ClientTranslationAfkTracePreview( string text )
 	return preview;
 }
 
+void ClientTranslationClearAfkCache()
+{
+	ClientTranslationAfkCacheSignature.deleteAll();
+	ClientTranslationAfkCacheResult.deleteAll();
+	ClientTranslationAfkCacheSuccess.deleteAll();
+	ClientTranslationAfkCacheFailureTick.deleteAll();
+}
+
 void ClientTranslationSetAfkModes( int enRuMode, int ruEnMode )
 {
+	if( ClientTranslationAfkEnRuMode != enRuMode ||
+	    ClientTranslationAfkRuEnMode != ruEnMode )
+	{
+		ClientTranslationClearAfkCache();
+	}
+
 	ClientTranslationAfkEnRuMode = enRuMode;
 	ClientTranslationAfkRuEnMode = ruEnMode;
 }
@@ -130,6 +147,19 @@ int ClientTranslationAfkMode( string& direction )
 	return 0;
 }
 
+bool ClientTranslationAfkModeUsesTcp( int mode )
+{
+	return mode == 3 || mode == 4;
+}
+
+string ClientTranslationAfkSignature(
+	string& direction,
+	int mode,
+	string& source )
+{
+	return direction + "\n" + mode + "\n" + source;
+}
+
 bool ClientTranslationTranslateAfkSync(
 	string& direction,
 	string& input,
@@ -150,6 +180,76 @@ bool ClientTranslationTranslateAfkSync(
 	return false;
 }
 
+bool ClientTranslationTranslateAfkTcpSync(
+	int mode,
+	string& direction,
+	string& input,
+	string& output )
+{
+	if( mode == 3 )
+	{
+		string@ translated = NativeTranslationTcpTranslate( input );
+		if( valid( translated ) )
+		{
+			output = translated;
+			return true;
+		}
+		return false;
+	}
+
+	if( mode == 4 && direction == "en_to_ru" )
+	{
+		string@ translated = NativeTranslationTcpArgosEnRu( input );
+		if( valid( translated ) )
+		{
+			output = translated;
+			return true;
+		}
+		return false;
+	}
+
+	if( mode == 4 && direction == "ru_to_en" )
+	{
+		string@ translated = NativeTranslationTcpArgosRuEn( input );
+		if( valid( translated ) )
+		{
+			output = translated;
+			return true;
+		}
+		return false;
+	}
+
+	output = input;
+	return false;
+}
+
+bool ClientTranslationTranslateAfkByMode(
+	int mode,
+	string& direction,
+	string& input,
+	string& output )
+{
+	if( mode == 1 || mode == 2 )
+	{
+		return ClientTranslationTranslateAfkSync(
+			direction,
+			input,
+			output );
+	}
+
+	if( ClientTranslationAfkModeUsesTcp( mode ) )
+	{
+		return ClientTranslationTranslateAfkTcpSync(
+			mode,
+			direction,
+			input,
+			output );
+	}
+
+	output = input;
+	return false;
+}
+
 void ClientTranslationInvalidateAfkCache( uint critterId )
 {
 	string key = "" + critterId;
@@ -165,16 +265,22 @@ void ClientTranslationInvalidateAfkCache( uint critterId )
 	{
 		ClientTranslationAfkCacheSuccess.delete( key );
 	}
+	if( ClientTranslationAfkCacheFailureTick.exists( key ) )
+	{
+		ClientTranslationAfkCacheFailureTick.delete( key );
+	}
 }
 
 void ClientTranslationValidateAfkCache(
 	uint critterId,
 	string& direction,
+	int mode,
 	string& source )
 {
 	string key = "" + critterId;
 	string cachedSignature = "";
-	string signature = direction + "\n" + source;
+	string signature =
+		ClientTranslationAfkSignature( direction, mode, source );
 	if( ClientTranslationAfkCacheSignature.get( key, cachedSignature ) &&
 	    cachedSignature != signature )
 	{
@@ -185,14 +291,16 @@ void ClientTranslationValidateAfkCache(
 bool ClientTranslationGetCachedAfkTranslation(
 	uint critterId,
 	string& direction,
+	int mode,
 	string& source,
 	string& translated,
 	bool& cacheHit )
 {
-	ClientTranslationValidateAfkCache( critterId, direction, source );
+	ClientTranslationValidateAfkCache( critterId, direction, mode, source );
 
 	string key = "" + critterId;
-	string signature = direction + "\n" + source;
+	string signature =
+		ClientTranslationAfkSignature( direction, mode, source );
 	string cachedSignature = "";
 	string cachedResult = "";
 	int cachedSuccess = 0;
@@ -202,15 +310,38 @@ bool ClientTranslationGetCachedAfkTranslation(
 	    ClientTranslationAfkCacheResult.get( key, cachedResult ) &&
 	    ClientTranslationAfkCacheSuccess.get( key, cachedSuccess ) )
 	{
-		cacheHit = true;
-		translated = cachedResult;
-		return cachedSuccess != 0;
+		if( cachedSuccess != 0 ||
+		    !ClientTranslationAfkModeUsesTcp( mode ) )
+		{
+			cacheHit = true;
+			translated = cachedResult;
+			return cachedSuccess != 0;
+		}
+
+		uint lastAttemptTick = 0;
+		if( ClientTranslationAfkCacheFailureTick.get(
+				key,
+				lastAttemptTick ) )
+		{
+			uint now = GetTick();
+			if( now - lastAttemptTick <
+			    CLIENT_TRANSLATION_AFK_RETRY_INTERVAL )
+			{
+				cacheHit = true;
+				translated = cachedResult;
+				return false;
+			}
+		}
 	}
 
 	cacheHit = false;
 	translated = "";
 	bool success =
-		ClientTranslationTranslateAfkSync( direction, source, translated );
+		ClientTranslationTranslateAfkByMode(
+			mode,
+			direction,
+			source,
+			translated );
 	if( !success || translated.length() == 0 )
 	{
 		translated = source;
@@ -220,6 +351,17 @@ bool ClientTranslationGetCachedAfkTranslation(
 	ClientTranslationAfkCacheSignature.set( key, signature );
 	ClientTranslationAfkCacheResult.set( key, translated );
 	ClientTranslationAfkCacheSuccess.set( key, success ? 1 : 0 );
+	if( success )
+	{
+		if( ClientTranslationAfkCacheFailureTick.exists( key ) )
+		{
+			ClientTranslationAfkCacheFailureTick.delete( key );
+		}
+	}
+	else if( ClientTranslationAfkModeUsesTcp( mode ) )
+	{
+		ClientTranslationAfkCacheFailureTick.set( key, GetTick() );
+	}
 	return success;
 }
 
@@ -1084,6 +1226,7 @@ bool replaceNick( CritterCl& cr )
 			ClientTranslationValidateAfkCache(
 				cr.Id,
 				afkDirection,
+				afkMode,
 				afkSourceText );
 
 			string afkDisplay =
@@ -1097,12 +1240,21 @@ bool replaceNick( CritterCl& cr )
 					ClientTranslationGetCachedAfkTranslation(
 						cr.Id,
 						afkDirection,
+						afkMode,
 						afkSourceText,
 						afkTranslatedText,
 						afkCacheHit );
 
 				afkCacheStatus = afkCacheHit ? "hit" : "miss";
 				if( translated && afkMode == 1 )
+				{
+					afkFinalText = afkTranslatedText;
+					afkDisplay =
+						ClientTranslationFormatAfkLine(
+							afkTranslatedText );
+				}
+				else if( translated &&
+				         ( afkMode == 3 || afkMode == 4 ) )
 				{
 					afkFinalText = afkTranslatedText;
 					afkDisplay =
