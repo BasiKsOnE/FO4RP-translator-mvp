@@ -8497,6 +8497,54 @@ void ShowPunchBagDmg( int damage, int hx, int hy, string@, int[] @ )
 	MapMessage( "-" + damage, hx, hy, __DamageHitDelay, 0xFFC80000, true, Random( -5, 5 ), -20 );
 }
 
+bool ClientTranslationIsNarrativeWhitespace( uint ch )
+{
+	return ch == 9 ||
+	       ch == 10 ||
+	       ch == 13 ||
+	       ch == 32;
+}
+
+string ClientTranslationNarrativePayloadText(
+	string& originalText,
+	string& leadingText,
+	string& trailingText )
+{
+	leadingText = "";
+	trailingText = "";
+
+	uint textLength = originalText.length();
+	uint start = 0;
+	while( start < textLength &&
+	       ClientTranslationIsNarrativeWhitespace( originalText[start] ) )
+	{
+		start++;
+	}
+
+	if( start >= textLength )
+	{
+		return "";
+	}
+
+	uint end = textLength;
+	while( end > start &&
+	       ClientTranslationIsNarrativeWhitespace( originalText[end - 1] ) )
+	{
+		end--;
+	}
+
+	if( start > 0 )
+	{
+		leadingText = substring( originalText, 0, start );
+	}
+	if( end < textLength )
+	{
+		trailingText = substring( originalText, end, textLength - end );
+	}
+
+	return substring( originalText, start, end - start );
+}
+
 void ShowNarrativeMessage( int hx, int hy, int isGM, string@ text, int[]@ )
 {
 	if( !valid(text) )
@@ -8522,21 +8570,55 @@ void ShowNarrativeMessage( int hx, int hy, int isGM, string@ text, int[]@ )
 	int mode = ClientTranslationMode( direction );
 	string displayText = originalText;
 	bool changed = false;
+	string narrativeLeading = "";
+	string narrativeTrailing = "";
+	string narrativePayload =
+		ClientTranslationNarrativePayloadText(
+			originalText,
+			narrativeLeading,
+			narrativeTrailing );
 
-	if( mode == 1 || mode == 2 )
+	if( narrativePayload.length() > 0 )
 	{
-		string translatedText = ClientTranslateSync( direction, originalText );
-		if( translatedText.length() > 0 && translatedText != originalText )
+		if( mode == 3 || mode == 4 )
 		{
-			if( mode == 1 )
+			string translatedText =
+				ClientTranslateTcpModeSync(
+					mode,
+					direction,
+					narrativePayload );
+			if( translatedText.length() > 0 )
 			{
-				displayText = translatedText;
+				displayText =
+					narrativeLeading +
+					translatedText +
+					narrativeTrailing;
 				changed = true;
 			}
-			else if( mode == 2 )
+		}
+		else if( mode == 1 || mode == 2 )
+		{
+			string translatedText =
+				ClientTranslateSync(
+					direction,
+					narrativePayload );
+			if( translatedText.length() > 0 &&
+			    translatedText != narrativePayload )
 			{
-				displayText = originalText + "\n" + translatedText;
-				changed = true;
+				string translatedDisplayText =
+					narrativeLeading +
+					translatedText +
+					narrativeTrailing;
+				if( mode == 1 )
+				{
+					displayText = translatedDisplayText;
+					changed = true;
+				}
+				else if( mode == 2 )
+				{
+					displayText = originalText + "\n" + translatedDisplayText;
+					changed = true;
+				}
 			}
 		}
 	}
