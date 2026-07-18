@@ -6,7 +6,7 @@ import importlib.util
 import time
 from dataclasses import dataclass
 
-SENTINEL = "[#TLJ{index:04d}#]"
+SENTINEL = "[#FORP{index:04d}#]"
 
 
 EN_MEDIUM = [

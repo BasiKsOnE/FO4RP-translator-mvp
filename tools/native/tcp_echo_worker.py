@@ -220,13 +220,13 @@ def log_diag(request_id: int, event: str, **fields: object) -> None:
     details = " ".join(f"{key}={value}" for key, value in fields.items())
     if details:
         print(
-            f"[TLJ TCP DIAG] ts={timestamp} id={request_id} "
+            f"[FORP TCP DIAG] ts={timestamp} id={request_id} "
             f"event={event} {details}",
             flush=True,
         )
     else:
         print(
-            f"[TLJ TCP DIAG] ts={timestamp} id={request_id} event={event}",
+            f"[FORP TCP DIAG] ts={timestamp} id={request_id} event={event}",
             flush=True,
         )
 
@@ -879,7 +879,7 @@ def serve() -> None:
         listener.settimeout(ACCEPT_TIMEOUT_SECONDS)
 
         print(
-            f"TLJ TCP echo worker listening on {HOST}:{PORT} "
+            f"FORP TCP translation worker listening on {HOST}:{PORT} "
             f"(workers={MAX_WORKERS}, backlog={LISTEN_BACKLOG}, "
             f"max_pending={MAX_PENDING_REQUESTS})"
         )
@@ -982,7 +982,7 @@ def main() -> None:
             print("Using fake translation backend for operations 3/4.")
         serve()
     except KeyboardInterrupt:
-        print("TLJ TCP echo worker stopped.")
+        print("FORP TCP translation worker stopped.")
 
 
 if __name__ == "__main__":

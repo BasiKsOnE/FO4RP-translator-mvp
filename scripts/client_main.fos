@@ -3092,7 +3092,7 @@ bool out_command( string& message, int& sayType )
 				}
 				else
 				{
-					Message( "EN->RU client translation: TCP Argos translated only" );
+					Message( "EN->RU client translation: TCP worker translated only" );
 				}
 			}
 			else
@@ -3116,7 +3116,7 @@ bool out_command( string& message, int& sayType )
 				}
 				else
 				{
-					Message( "RU->EN client translation: TCP Argos translated only" );
+					Message( "RU->EN client translation: TCP worker translated only" );
 				}
 			}
 
