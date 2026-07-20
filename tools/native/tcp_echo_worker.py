@@ -2,12 +2,16 @@
 
 import html
 import importlib.util
+import json
 import socket
 import struct
 import os
 import sys
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime
@@ -31,17 +35,28 @@ DEFAULT_MAX_WORKERS = 4
 DEFAULT_MAX_PENDING_REQUESTS = 16
 HEADER = struct.Struct("<4sB3sI")
 PREVIEW_LIMIT = 80
+MAX_PROXY_RESPONSE_BYTES = 65536
 NEXT_REQUEST_ID = 0
 BACKEND_ARGOS = "argos"
 BACKEND_GOOGLE = "google"
 BACKEND_FAKE = "fake"
+BACKEND_PROXY = "proxy"
 BACKEND_ENV_NAME = "FORP_TRANSLATION_BACKEND"
 BACKEND_ENV_FALLBACK_NAME = "TLJ_TRANSLATION_BACKEND"
 GOOGLE_VERIFY_API_ENV_NAME = "FORP_GOOGLE_VERIFY_API"
 GOOGLE_VERIFY_API_ENV_FALLBACK_NAME = "TLJ_GOOGLE_VERIFY_API"
 GOOGLE_WARMUP_ENV_NAME = "FORP_GOOGLE_WARMUP"
 GOOGLE_WARMUP_ENV_FALLBACK_NAME = "TLJ_GOOGLE_WARMUP"
-VALID_TRANSLATION_BACKENDS = (BACKEND_ARGOS, BACKEND_GOOGLE, BACKEND_FAKE)
+PROXY_URL_ENV_NAME = "FORP_PROXY_URL"
+PROXY_URL_DEFAULT = "http://127.0.0.1:8787/translate"
+PROXY_TOKEN_ENV_NAME = "FORP_PROXY_TOKEN"
+PROXY_TIMEOUT_SECONDS_ENV_NAME = "FORP_PROXY_TIMEOUT_SECONDS"
+VALID_TRANSLATION_BACKENDS = (
+    BACKEND_ARGOS,
+    BACKEND_GOOGLE,
+    BACKEND_FAKE,
+    BACKEND_PROXY,
+)
 DEFAULT_TRANSLATION_CACHE_MAX = 2048
 DEFAULT_TRANSLATION_CACHE_TTL_SECONDS = 3600.0
 
@@ -136,6 +151,24 @@ def read_translation_backend_env() -> str:
     return BACKEND_ARGOS
 
 
+def sanitize_proxy_url(url: str) -> str:
+    clean_value = url.strip()
+    if not clean_value:
+        return clean_value
+    try:
+        parsed = urllib.parse.urlsplit(clean_value)
+    except ValueError:
+        return clean_value
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return clean_value
+    hostname = parsed.hostname or ""
+    if parsed.port is not None:
+        hostname = f"{hostname}:{parsed.port}"
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, hostname, parsed.path or "/", "", "")
+    )
+
+
 LISTEN_BACKLOG = read_positive_int_env(
     "FORP_TCP_BACKLOG",
     "TLJ_TCP_BACKLOG",
@@ -180,6 +213,13 @@ ARGOS_STARTUP_LOAD_ERROR = ""
 GOOGLE_STARTUP_LOAD_ERROR = ""
 TRANSLATION_CACHE: OrderedDict[tuple[str, str, str], tuple[float, str]] = OrderedDict()
 IN_FLIGHT_TRANSLATIONS: dict[tuple[str, str, str], InFlightTranslation] = {}
+PROXY_URL = os.environ.get(PROXY_URL_ENV_NAME, PROXY_URL_DEFAULT)
+PROXY_TOKEN = os.environ.get(PROXY_TOKEN_ENV_NAME, "")
+PROXY_TIMEOUT_SECONDS = read_positive_float_env(
+    PROXY_TIMEOUT_SECONDS_ENV_NAME,
+    "TLJ_PROXY_TIMEOUT_SECONDS",
+    4.0,
+)
 
 
 def next_request_id() -> int:
@@ -425,6 +465,95 @@ class GoogleTranslator:
         )
 
 
+class ProxyTranslator:
+    def __init__(self) -> None:
+        self.load_error = ""
+        self.url = sanitize_proxy_url(PROXY_URL)
+        self.token = PROXY_TOKEN
+        self.timeout_seconds = PROXY_TIMEOUT_SECONDS
+
+    def load(self) -> None:
+        print(f"Python: {sys.executable}")
+        print(
+            "Loading proxy translation backend... "
+            f"url={sanitize_proxy_url(self.url)} "
+            f"token={'configured' if self.token else 'not_configured'} "
+            f"timeout={self.timeout_seconds:.3f}s"
+        )
+        if not self.url:
+            self.load_error = "invalid proxy URL: empty"
+            print(f"Proxy backend unavailable: {self.load_error}")
+            return
+        try:
+            parsed = urllib.parse.urlsplit(self.url)
+        except ValueError as error:
+            self.load_error = f"invalid proxy URL: {error}"
+            print(f"Proxy backend unavailable: {self.load_error}")
+            return
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            self.load_error = f"invalid proxy URL: {self.url}"
+            print(f"Proxy backend unavailable: {self.load_error}")
+            return
+        self.load_error = ""
+        print("Proxy translation backend ready")
+
+    def translate(self, direction: str, text: str) -> str:
+        if self.load_error:
+            raise ProtocolError("proxy unavailable: " + self.load_error)
+
+        source_code, target_code = direction_language_codes(direction)
+        payload = {
+            "source_language": source_code,
+            "target_language": target_code,
+            "text": text,
+        }
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(
+            self.url,
+            data=body,
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+            method="POST",
+        )
+        if self.token:
+            request.add_header("Authorization", f"Bearer {self.token}")
+
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+                raw_bytes = response.read(MAX_PROXY_RESPONSE_BYTES + 1)
+        except urllib.error.HTTPError as error:
+            raw_bytes = error.read(MAX_PROXY_RESPONSE_BYTES + 1)
+            raise ProtocolError(
+                "proxy returned HTTP "
+                f"{error.code}: {preview_text(raw_bytes.decode('utf-8', errors='replace'))}"
+            ) from error
+        except urllib.error.URLError as error:
+            raise ProtocolError(f"proxy request failed: {error.reason}") from error
+        except TimeoutError as error:
+            raise ProtocolError("proxy request timed out") from error
+        except Exception as error:
+            raise ProtocolError("proxy request failed: " + str(error)) from error
+
+        if len(raw_bytes) > MAX_PROXY_RESPONSE_BYTES:
+            raise ProtocolError("proxy response too large")
+        try:
+            response_payload = json.loads(raw_bytes.decode("utf-8", errors="replace"))
+        except json.JSONDecodeError as error:
+            raise ProtocolError("proxy returned invalid JSON") from error
+        if not isinstance(response_payload, dict):
+            raise ProtocolError("proxy returned unexpected JSON shape")
+        if not response_payload.get("ok", False):
+            error_text = str(response_payload.get("error", "proxy returned ok=false"))
+            raise ProtocolError("proxy returned error: " + error_text)
+
+        translated = response_payload.get("translated_text", "")
+        if not isinstance(translated, str) or not translated:
+            raise ProtocolError("proxy returned empty translation")
+        return translated
+
+
 def fake_translate(direction: str, text: str) -> str:
     direction_language_codes(direction)
     return FAKE_TRANSLATION_PREFIX + text
@@ -460,11 +589,22 @@ def get_thread_google() -> GoogleTranslator:
     return translator
 
 
+def get_thread_proxy() -> ProxyTranslator:
+    translator = getattr(THREAD_LOCAL, "proxy", None)
+    if translator is None:
+        translator = ProxyTranslator()
+        translator.load()
+        THREAD_LOCAL.proxy = translator
+    return translator
+
+
 def translate_without_cache(direction: str, text: str) -> str:
     if TRANSLATION_BACKEND == BACKEND_FAKE:
         return fake_translate(direction, text)
     if TRANSLATION_BACKEND == BACKEND_GOOGLE:
         return get_thread_google().translate(direction, text)
+    if TRANSLATION_BACKEND == BACKEND_PROXY:
+        return get_thread_proxy().translate(direction, text)
     return get_thread_argos().translate(direction, text)
 
 
@@ -619,6 +759,8 @@ def warm_worker_translator(start_event: threading.Event) -> None:
         get_thread_argos()
     elif TRANSLATION_BACKEND == BACKEND_GOOGLE:
         get_thread_google()
+    elif TRANSLATION_BACKEND == BACKEND_PROXY:
+        get_thread_proxy()
 
 
 def warm_worker_pool(executor: ThreadPoolExecutor) -> None:
@@ -964,6 +1106,10 @@ def main() -> None:
     global ARGOS_STARTUP_LOAD_ERROR, GOOGLE_STARTUP_LOAD_ERROR
     try:
         print(f"Translation backend: {TRANSLATION_BACKEND}")
+        if TRANSLATION_BACKEND == BACKEND_PROXY:
+            print(f"Proxy URL: {sanitize_proxy_url(PROXY_URL)}")
+            print(f"Proxy token: {'configured' if PROXY_TOKEN else 'not_configured'}")
+            print(f"Proxy timeout seconds: {PROXY_TIMEOUT_SECONDS:g}")
         print(
             f"Translation cache: max={TRANSLATION_CACHE_MAX} "
             f"ttl_seconds={TRANSLATION_CACHE_TTL_SECONDS:g}"
@@ -978,6 +1124,10 @@ def main() -> None:
             google.load(verify_api=GOOGLE_VERIFY_API)
             GOOGLE_STARTUP_LOAD_ERROR = google.load_error
             del google
+        elif TRANSLATION_BACKEND == BACKEND_PROXY:
+            proxy = ProxyTranslator()
+            proxy.load()
+            del proxy
         else:
             print("Using fake translation backend for operations 3/4.")
         serve()
