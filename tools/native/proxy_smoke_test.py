@@ -7,6 +7,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -29,8 +30,61 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--count", type=int, default=1)
     parser.add_argument("--concurrency", type=int, default=1)
     parser.add_argument("--timeout", type=float, default=10.0)
+    parser.add_argument("--skip-health", action="store_true")
     parser.add_argument("--verbose", action="store_true")
     return parser.parse_args()
+
+
+def health_url_from_translate_url(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    return urllib.parse.urlunsplit(
+        (parsed.scheme, parsed.netloc, "/healthz", "", "")
+    )
+
+
+def run_health_check(args: argparse.Namespace) -> bool:
+    url = health_url_from_translate_url(args.url)
+    request = urllib.request.Request(
+        url,
+        headers={"Accept": "application/json"},
+        method="GET",
+    )
+    if args.token:
+        request.add_header("Authorization", f"Bearer {args.token}")
+    started = time.perf_counter()
+    try:
+        with urllib.request.urlopen(request, timeout=args.timeout) as response:
+            raw_body = response.read().decode("utf-8", errors="replace")
+            payload = json.loads(raw_body)
+    except urllib.error.HTTPError as error:
+        if error.code in (401, 403):
+            print(f"Health check failed: auth mismatch HTTP {error.code}", flush=True)
+        else:
+            print(f"Health check failed: HTTP {error.code}", flush=True)
+        return False
+    except urllib.error.URLError as error:
+        print(f"Health check failed: proxy unreachable ({error.reason})", flush=True)
+        return False
+    except json.JSONDecodeError as error:
+        print(f"Health check failed: non-JSON response ({error})", flush=True)
+        return False
+    except Exception as error:
+        print(f"Health check failed: {error}", flush=True)
+        return False
+    elapsed = time.perf_counter() - started
+    if not isinstance(payload, dict) or not payload.get("ok"):
+        print(f"Health check failed: bad health response {payload!r}", flush=True)
+        return False
+    print(
+        "Health check ok "
+        f"backend={payload.get('backend')} "
+        f"auth_enabled={payload.get('auth_enabled')} "
+        f"cache_size={payload.get('cache_size')} "
+        f"in_flight_count={payload.get('in_flight_count')} "
+        f"latency={elapsed:.3f}s",
+        flush=True,
+    )
+    return True
 
 
 def build_request_payload(args: argparse.Namespace, request_id: int) -> dict[str, object]:
@@ -97,6 +151,8 @@ def run_single_request(request_id: int, args: argparse.Namespace) -> dict[str, o
 
 def main() -> int:
     args = parse_args()
+    if not args.skip_health and not run_health_check(args):
+        return 1
     count = max(1, args.count)
     concurrency = max(1, min(args.concurrency, count))
     results: list[dict[str, object]] = []

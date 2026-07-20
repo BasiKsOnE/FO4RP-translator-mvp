@@ -267,6 +267,35 @@ def translate_with_cache(backend: str, source_language: str, target_language: st
 
 
 class TranslationRequestHandler(BaseHTTPRequestHandler):
+    def do_GET(self) -> None:
+        request_id = str(time.time_ns())
+        if self.path != "/healthz":
+            log_diag(
+                "rejected",
+                request_id=request_id,
+                reason="unknown_endpoint",
+                path=preview_text(self.path),
+            )
+            self.send_json(404, {"ok": False, "error": "unknown endpoint"})
+            return
+        if not self.authorized():
+            log_diag("rejected", request_id=request_id, reason="unauthorized", path="/healthz")
+            self.send_json(401, {"ok": False, "error": "unauthorized"})
+            return
+        with TRANSLATION_CACHE_LOCK:
+            cache_size = len(TRANSLATION_CACHE)
+            in_flight_count = len(IN_FLIGHT_TRANSLATIONS)
+        self.send_json(
+            200,
+            {
+                "ok": True,
+                "backend": BACKEND,
+                "auth_enabled": AUTH_ENABLED,
+                "cache_size": cache_size,
+                "in_flight_count": in_flight_count,
+            },
+        )
+
     def do_POST(self) -> None:
         request_id = str(time.time_ns())
         if self.path != "/translate":

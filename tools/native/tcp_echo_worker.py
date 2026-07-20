@@ -495,7 +495,7 @@ class ProxyTranslator:
             print(f"Proxy backend unavailable: {self.load_error}")
             return
         self.load_error = ""
-        print("Proxy translation backend ready")
+        print("Proxy translation backend config valid; reachability not probed at startup.")
 
     def translate(self, direction: str, text: str) -> str:
         if self.load_error:
