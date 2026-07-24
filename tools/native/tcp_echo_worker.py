@@ -33,6 +33,8 @@ ACCEPT_TIMEOUT_SECONDS = 0.25
 DEFAULT_LISTEN_BACKLOG = 32
 DEFAULT_MAX_WORKERS = 4
 DEFAULT_MAX_PENDING_REQUESTS = 16
+UNIVERSAL_ENVELOPE_MAGIC = "FORP_LANG1"
+UNIVERSAL_DIRECTION_LABEL = "universal"
 HEADER = struct.Struct("<4sB3sI")
 PREVIEW_LIMIT = 80
 MAX_PROXY_RESPONSE_BYTES = 65536
@@ -63,6 +65,13 @@ DEFAULT_TRANSLATION_CACHE_TTL_SECONDS = 3600.0
 
 class ProtocolError(Exception):
     pass
+
+
+class UniversalTranslationRequest:
+    def __init__(self, source_language: str, target_language: str, text: str) -> None:
+        self.source_language = source_language
+        self.target_language = target_language
+        self.text = text
 
 
 class InFlightTranslation:
@@ -211,8 +220,14 @@ PENDING_REQUESTS = 0
 THREAD_LOCAL = threading.local()
 ARGOS_STARTUP_LOAD_ERROR = ""
 GOOGLE_STARTUP_LOAD_ERROR = ""
-TRANSLATION_CACHE: OrderedDict[tuple[str, str, str], tuple[float, str]] = OrderedDict()
-IN_FLIGHT_TRANSLATIONS: dict[tuple[str, str, str], InFlightTranslation] = {}
+TRANSLATION_CACHE: OrderedDict[
+    tuple[str, str, str, str, str],
+    tuple[float, str],
+] = OrderedDict()
+IN_FLIGHT_TRANSLATIONS: dict[
+    tuple[str, str, str, str, str],
+    InFlightTranslation,
+] = {}
 PROXY_URL = os.environ.get(PROXY_URL_ENV_NAME, PROXY_URL_DEFAULT)
 PROXY_TOKEN = os.environ.get(PROXY_TOKEN_ENV_NAME, "")
 PROXY_TIMEOUT_SECONDS = read_positive_float_env(
@@ -322,6 +337,87 @@ def direction_language_codes(direction: str) -> tuple[str, str]:
     raise ProtocolError("unsupported translation direction")
 
 
+def direction_from_language_codes(source_language: str, target_language: str) -> str:
+    if source_language == "en" and target_language == "ru":
+        return "en_to_ru"
+    if source_language == "ru" and target_language == "en":
+        return "ru_to_en"
+    raise ProtocolError("unsupported Argos language pair")
+
+
+def language_pair_label(source_language: str, target_language: str) -> str:
+    return f"{source_language}_to_{target_language}"
+
+
+def normalize_worker_language_code(raw_code: str, field_name: str) -> str:
+    value = raw_code.strip().lower()
+    if not value:
+        raise ProtocolError(f"{field_name} is empty")
+    if len(value) > 20:
+        raise ProtocolError(f"{field_name} is too long")
+    for char in value:
+        if not (("a" <= char <= "z") or ("0" <= char <= "9") or char == "-"):
+            raise ProtocolError(f"{field_name} contains unsupported characters")
+    return value
+
+
+def parse_universal_translation_request(
+    payload_text: str,
+) -> UniversalTranslationRequest | None:
+    first_line_end = payload_text.find("\n")
+    if first_line_end == -1:
+        if payload_text.rstrip("\r") == UNIVERSAL_ENVELOPE_MAGIC:
+            raise ProtocolError("universal envelope missing header/body separator")
+        return None
+
+    first_line = payload_text[:first_line_end]
+    if first_line.endswith("\r"):
+        first_line = first_line[:-1]
+    if first_line != UNIVERSAL_ENVELOPE_MAGIC:
+        return None
+
+    header_start = first_line_end + 1
+    separator_pos = -1
+    separator_len = 0
+    for separator in ("\r\n\r\n", "\n\n"):
+        pos = payload_text.find(separator, header_start)
+        if pos != -1 and (separator_pos == -1 or pos < separator_pos):
+            separator_pos = pos
+            separator_len = len(separator)
+
+    if separator_pos == -1:
+        raise ProtocolError("universal envelope missing header/body separator")
+
+    header_text = payload_text[header_start:separator_pos]
+    body_text = payload_text[separator_pos + separator_len :]
+    if not body_text.strip():
+        raise ProtocolError("universal envelope text is empty")
+
+    headers: dict[str, str] = {}
+    for raw_line in header_text.splitlines():
+        if not raw_line:
+            continue
+        equals_pos = raw_line.find("=")
+        if equals_pos <= 0:
+            raise ProtocolError("invalid universal envelope header")
+        key = raw_line[:equals_pos].strip().lower()
+        value = raw_line[equals_pos + 1 :].strip()
+        if key in headers:
+            raise ProtocolError("duplicate universal envelope header")
+        headers[key] = value
+
+    if "source_language" not in headers:
+        raise ProtocolError("universal envelope missing source_language")
+    if "target_language" not in headers:
+        raise ProtocolError("universal envelope missing target_language")
+
+    return UniversalTranslationRequest(
+        normalize_worker_language_code(headers["source_language"], "source_language"),
+        normalize_worker_language_code(headers["target_language"], "target_language"),
+        body_text,
+    )
+
+
 def google_credential_status() -> str:
     credentials_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
     if not credentials_path:
@@ -429,13 +525,12 @@ class GoogleTranslator:
         elapsed = time.perf_counter() - started
         print(f"Google Translate backend ready in {elapsed:.3f}s")
 
-    def translate(self, direction: str, text: str) -> str:
+    def translate_language_pair(self, source_code: str, target_code: str, text: str) -> str:
         if self.load_error:
             raise ProtocolError("Google Translate unavailable: " + self.load_error)
         if self.client is None:
             raise ProtocolError("Google Translate client is not loaded")
 
-        source_code, target_code = direction_language_codes(direction)
         try:
             result = self.client.translate(
                 text,
@@ -455,6 +550,10 @@ class GoogleTranslator:
         if not translated:
             raise ProtocolError("Google returned empty translation")
         return translated
+
+    def translate(self, direction: str, text: str) -> str:
+        source_code, target_code = direction_language_codes(direction)
+        return self.translate_language_pair(source_code, target_code, text)
 
     def warmup(self) -> None:
         print("Running Google Translate worker warmup...")
@@ -497,11 +596,10 @@ class ProxyTranslator:
         self.load_error = ""
         print("Proxy translation backend config valid; reachability not probed at startup.")
 
-    def translate(self, direction: str, text: str) -> str:
+    def translate_language_pair(self, source_code: str, target_code: str, text: str) -> str:
         if self.load_error:
             raise ProtocolError("proxy unavailable: " + self.load_error)
 
-        source_code, target_code = direction_language_codes(direction)
         payload = {
             "source_language": source_code,
             "target_language": target_code,
@@ -554,8 +652,19 @@ class ProxyTranslator:
         return translated
 
 
-def fake_translate(direction: str, text: str) -> str:
-    direction_language_codes(direction)
+    def translate(self, direction: str, text: str) -> str:
+        source_code, target_code = direction_language_codes(direction)
+        return self.translate_language_pair(source_code, target_code, text)
+
+
+def fake_translate_language_pair(
+    source_language: str,
+    target_language: str,
+    text: str,
+    is_universal: bool,
+) -> str:
+    if is_universal:
+        return f"[PY FAKE {source_language}->{target_language}] " + text
     return FAKE_TRANSLATION_PREFIX + text
 
 
@@ -598,18 +707,43 @@ def get_thread_proxy() -> ProxyTranslator:
     return translator
 
 
-def translate_without_cache(direction: str, text: str) -> str:
+def translate_without_cache(
+    source_language: str,
+    target_language: str,
+    text: str,
+    is_universal: bool,
+) -> str:
     if TRANSLATION_BACKEND == BACKEND_FAKE:
-        return fake_translate(direction, text)
+        return fake_translate_language_pair(
+            source_language,
+            target_language,
+            text,
+            is_universal,
+        )
     if TRANSLATION_BACKEND == BACKEND_GOOGLE:
-        return get_thread_google().translate(direction, text)
+        return get_thread_google().translate_language_pair(
+            source_language,
+            target_language,
+            text,
+        )
     if TRANSLATION_BACKEND == BACKEND_PROXY:
-        return get_thread_proxy().translate(direction, text)
+        return get_thread_proxy().translate_language_pair(
+            source_language,
+            target_language,
+            text,
+        )
+    direction = direction_from_language_codes(source_language, target_language)
     return get_thread_argos().translate(direction, text)
 
 
-def translation_cache_key(direction: str, text: str) -> tuple[str, str, str]:
-    return TRANSLATION_BACKEND, direction, text
+def translation_cache_key(
+    source_language: str,
+    target_language: str,
+    text: str,
+    is_universal: bool,
+) -> tuple[str, str, str, str, str]:
+    request_kind = "universal" if is_universal else "legacy"
+    return TRANSLATION_BACKEND, request_kind, source_language, target_language, text
 
 
 def prune_translation_cache_locked(now: float) -> None:
@@ -631,9 +765,9 @@ def prune_translation_cache_locked(now: float) -> None:
 
 def begin_translation_request(
     request_id: int,
-    key: tuple[str, str, str],
+    key: tuple[str, str, str, str, str],
 ) -> tuple[str | None, InFlightTranslation | None, bool]:
-    backend, direction, _ = key
+    backend, request_kind, source_language, target_language, _ = key
     cached_result: str | None = None
     in_flight: InFlightTranslation | None = None
     is_leader = False
@@ -653,13 +787,20 @@ def begin_translation_request(
                 IN_FLIGHT_TRANSLATIONS[key] = in_flight
                 is_leader = True
 
+    log_fields = {
+        "backend": backend,
+        "request_kind": request_kind,
+        "source_language": source_language,
+        "target_language": target_language,
+        "pair": language_pair_label(source_language, target_language),
+    }
     if cached_result is not None:
-        log_diag(request_id, "cache_hit", backend=backend, direction=direction)
+        log_diag(request_id, "cache_hit", **log_fields)
     elif is_leader:
-        log_diag(request_id, "cache_miss", backend=backend, direction=direction)
-        log_diag(request_id, "dedupe_leader", backend=backend, direction=direction)
+        log_diag(request_id, "cache_miss", **log_fields)
+        log_diag(request_id, "dedupe_leader", **log_fields)
     else:
-        log_diag(request_id, "dedupe_wait", backend=backend, direction=direction)
+        log_diag(request_id, "dedupe_wait", **log_fields)
 
     return cached_result, in_flight, is_leader
 
@@ -678,7 +819,7 @@ def store_completed_translation_locked(
 
 
 def finish_in_flight_translation(
-    key: tuple[str, str, str],
+    key: tuple[str, str, str, str, str],
     in_flight: InFlightTranslation,
     translated_text: str,
 ) -> int:
@@ -691,7 +832,7 @@ def finish_in_flight_translation(
 
 
 def fail_in_flight_translation(
-    key: tuple[str, str, str],
+    key: tuple[str, str, str, str, str],
     in_flight: InFlightTranslation,
     error_text: str,
 ) -> None:
@@ -703,26 +844,40 @@ def fail_in_flight_translation(
 
 def wait_for_in_flight_translation(
     request_id: int,
-    key: tuple[str, str, str],
+    key: tuple[str, str, str, str, str],
     in_flight: InFlightTranslation,
 ) -> str:
-    backend, direction, _ = key
+    backend, request_kind, source_language, target_language, _ = key
+    log_fields = {
+        "backend": backend,
+        "request_kind": request_kind,
+        "source_language": source_language,
+        "target_language": target_language,
+        "pair": language_pair_label(source_language, target_language),
+    }
     in_flight.event.wait()
     if in_flight.error:
-        log_diag(request_id, "dedupe_error", backend=backend, direction=direction)
+        log_diag(request_id, "dedupe_error", **log_fields)
         raise ProtocolError(in_flight.error)
     if not in_flight.result:
         raise ProtocolError("translation unavailable after in-flight wait")
-    log_diag(request_id, "dedupe_result", backend=backend, direction=direction)
+    log_diag(request_id, "dedupe_result", **log_fields)
     return in_flight.result
 
 
 def translate_with_configured_backend(
     request_id: int,
-    direction: str,
+    source_language: str,
+    target_language: str,
     text: str,
+    is_universal: bool,
 ) -> str:
-    key = translation_cache_key(direction, text)
+    key = translation_cache_key(
+        source_language,
+        target_language,
+        text,
+        is_universal,
+    )
     cached_result, in_flight, is_leader = begin_translation_request(request_id, key)
     if cached_result is not None:
         return cached_result
@@ -732,7 +887,12 @@ def translate_with_configured_backend(
         return wait_for_in_flight_translation(request_id, key, in_flight)
 
     try:
-        translated_text = translate_without_cache(direction, text)
+        translated_text = translate_without_cache(
+            source_language,
+            target_language,
+            text,
+            is_universal,
+        )
     except Exception as error:
         error_text = str(error)
         fail_in_flight_translation(key, in_flight, error_text)
@@ -742,12 +902,15 @@ def translate_with_configured_backend(
 
     cache_size = finish_in_flight_translation(key, in_flight, translated_text)
     if TRANSLATION_CACHE_MAX > 0:
-        backend, cache_direction, _ = key
+        backend, request_kind, cache_source, cache_target, _ = key
         log_diag(
             request_id,
             "cache_store",
             backend=backend,
-            direction=cache_direction,
+            request_kind=request_kind,
+            source_language=cache_source,
+            target_language=cache_target,
+            pair=language_pair_label(cache_source, cache_target),
             cache_size=cache_size,
         )
     return translated_text
@@ -833,17 +996,29 @@ def handle_connection(
         except UnicodeDecodeError as error:
             raise ProtocolError("payload is not valid UTF-8") from error
 
-        log_diag(
-            request_id,
-            "request",
-            remote=f"{address[0]}:{address[1]}",
-            op=operation,
-            op_name=operation_name(operation),
-            direction=operation_direction(operation),
-            bytes=len(payload),
-            after_accept=f"{started - accepted_at:.3f}s",
-            preview=preview_text(payload_text),
-        )
+        universal_request = None
+        if operation in (OPERATION_ARGOS_EN_RU, OPERATION_ARGOS_RU_EN):
+            universal_request = parse_universal_translation_request(payload_text)
+
+        request_fields = {
+            "remote": f"{address[0]}:{address[1]}",
+            "op": operation,
+            "op_name": operation_name(operation),
+            "direction": operation_direction(operation),
+            "bytes": len(payload),
+            "after_accept": f"{started - accepted_at:.3f}s",
+            "preview": preview_text(payload_text),
+        }
+        if universal_request is not None:
+            request_fields["direction"] = UNIVERSAL_DIRECTION_LABEL
+            request_fields["source_language"] = universal_request.source_language
+            request_fields["target_language"] = universal_request.target_language
+            request_fields["pair"] = language_pair_label(
+                universal_request.source_language,
+                universal_request.target_language,
+            )
+
+        log_diag(request_id, "request", **request_fields)
 
         if operation == OPERATION_ECHO:
             response_payload = payload
@@ -861,18 +1036,45 @@ def handle_connection(
                 if operation == OPERATION_ARGOS_EN_RU
                 else "ru_to_en"
             )
+            source_language, target_language = direction_language_codes(direction)
+            translation_text = payload_text
+            is_universal = False
+            if universal_request is not None:
+                source_language = universal_request.source_language
+                target_language = universal_request.target_language
+                translation_text = universal_request.text
+                is_universal = True
+
+            pair = language_pair_label(source_language, target_language)
+            translation_log_fields = {
+                "backend": TRANSLATION_BACKEND,
+                "direction": UNIVERSAL_DIRECTION_LABEL if is_universal else direction,
+                "source_language": source_language,
+                "target_language": target_language,
+                "pair": pair,
+            }
             translation_started = time.perf_counter()
-            log_diag(
-                request_id,
-                "translation_start",
-                direction=direction,
-                backend=TRANSLATION_BACKEND,
-            )
-            translated_text = translate_with_configured_backend(
-                request_id,
-                direction,
-                payload_text,
-            )
+            if is_universal and source_language == target_language:
+                log_diag(
+                    request_id,
+                    "translation_skip",
+                    reason="same_language",
+                    **translation_log_fields,
+                )
+                translated_text = translation_text
+            else:
+                log_diag(
+                    request_id,
+                    "translation_start",
+                    **translation_log_fields,
+                )
+                translated_text = translate_with_configured_backend(
+                    request_id,
+                    source_language,
+                    target_language,
+                    translation_text,
+                    is_universal,
+                )
             translation_elapsed = time.perf_counter() - translation_started
             response_payload = translated_text.encode("utf-8")
             if len(response_payload) > MAX_PAYLOAD:
@@ -880,13 +1082,15 @@ def handle_connection(
             log_diag(
                 request_id,
                 "translation_finish",
-                direction=direction,
                 elapsed=f"{translation_elapsed:.3f}s",
                 response_bytes=len(response_payload),
                 preview=preview_text(translated_text),
-                backend=TRANSLATION_BACKEND,
+                **translation_log_fields,
             )
-            action = f"{TRANSLATION_BACKEND}-translated {direction}"
+            if is_universal:
+                action = f"{TRANSLATION_BACKEND}-translated universal {pair}"
+            else:
+                action = f"{TRANSLATION_BACKEND}-translated {direction}"
 
         log_diag(
             request_id,
