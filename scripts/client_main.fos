@@ -73,6 +73,10 @@ import void ClientTranslationSetAfkModes( int enRuMode, int ruEnMode ) from "cli
 
 int ClientTranslateEnRuMode = 0;
 int ClientTranslateRuEnMode = 0;
+string ClientTranslationUniversalSourceLanguage = "en";
+string ClientTranslationUniversalTargetLanguage = "en";
+bool ClientTranslationUniversalIncomingEnabled = false;
+bool ClientTranslationUniversalOutgoingTagEnabled = false;
 bool ClientTranslationTraceEnabled = false;
 
 import void InputBoxKeyPressed( uint8 key ) from "client_screen_inputbox";
@@ -2150,6 +2154,70 @@ int ClientTranslationMode( string& direction )
 	return 0;
 }
 
+string ClientTranslationSupportedLanguageList()
+{
+	return "en, ru, es, fr, it, de, pt, uk, pl";
+}
+
+bool ClientTranslationIsSupportedLanguageCode( string languageCode )
+{
+	return languageCode == "en" ||
+	       languageCode == "ru" ||
+	       languageCode == "es" ||
+	       languageCode == "fr" ||
+	       languageCode == "it" ||
+	       languageCode == "de" ||
+	       languageCode == "pt" ||
+	       languageCode == "uk" ||
+	       languageCode == "pl";
+}
+
+bool ClientTranslationNormalizeLanguageCode(
+	string rawCode,
+	string& normalizedCode )
+{
+	normalizedCode = strlwr( rawCode );
+	return ClientTranslationIsSupportedLanguageCode( normalizedCode );
+}
+
+string ClientTranslationOnOffText( bool enabled )
+{
+	return enabled ? "ON" : "OFF";
+}
+
+void ClientTranslationPrintLanguageUsage( string command )
+{
+	Message(
+		"Usage: " + command + " <" +
+		ClientTranslationSupportedLanguageList() + ">" );
+}
+
+void ClientTranslationPrintToggleUsage( string command )
+{
+	Message( "Usage: " + command + " 0" );
+	Message( "Usage: " + command + " 1" );
+}
+
+void ClientTranslationPrintStatus()
+{
+	Message( "FORP universal translation status:" );
+	Message( "  source language: " + ClientTranslationUniversalSourceLanguage );
+	Message( "  target language: " + ClientTranslationUniversalTargetLanguage );
+	Message(
+		"  incoming tags: " +
+		ClientTranslationOnOffText(
+			ClientTranslationUniversalIncomingEnabled ) );
+	Message(
+		"  outgoing source tags: " +
+		ClientTranslationOnOffText(
+			ClientTranslationUniversalOutgoingTagEnabled ) );
+	Message( "Legacy EN->RU mode: " + ( "" + ClientTranslateEnRuMode ) );
+	Message( "Legacy RU->EN mode: " + ( "" + ClientTranslateRuEnMode ) );
+	Message(
+		"Translation trace: " +
+		ClientTranslationOnOffText( ClientTranslationTraceEnabled ) );
+}
+
 string ClientTranslationTracePreview( string text )
 {
 	uint limit = text.length();
@@ -3036,6 +3104,120 @@ bool out_command( string& message, int& sayType )
 		}
 
 		string@[]@ parts = split( message, " " );
+
+
+		if( parts[0] == "~tl_status" )
+		{
+			if( parts.length() != 1 )
+			{
+				Message( "Usage: ~tl_status" );
+				return false;
+			}
+
+			ClientTranslationPrintStatus();
+			return false;
+		}
+
+		if( parts[0] == "~tl_source" )
+		{
+			if( parts.length() != 2 )
+			{
+				ClientTranslationPrintLanguageUsage( "~tl_source" );
+				return false;
+			}
+
+			string normalizedLanguage = "";
+			if( !ClientTranslationNormalizeLanguageCode(
+					parts[1],
+					normalizedLanguage ) )
+			{
+				ClientTranslationPrintLanguageUsage( "~tl_source" );
+				return false;
+			}
+
+			ClientTranslationUniversalSourceLanguage = normalizedLanguage;
+			Message( "FORP universal source language: " + normalizedLanguage );
+			return false;
+		}
+
+		if( parts[0] == "~tl_target" )
+		{
+			if( parts.length() != 2 )
+			{
+				ClientTranslationPrintLanguageUsage( "~tl_target" );
+				return false;
+			}
+
+			string normalizedLanguage = "";
+			if( !ClientTranslationNormalizeLanguageCode(
+					parts[1],
+					normalizedLanguage ) )
+			{
+				ClientTranslationPrintLanguageUsage( "~tl_target" );
+				return false;
+			}
+
+			ClientTranslationUniversalTargetLanguage = normalizedLanguage;
+			Message( "FORP universal target language: " + normalizedLanguage );
+			return false;
+		}
+
+		if( parts[0] == "~lang" )
+		{
+			if( parts.length() != 2 )
+			{
+				ClientTranslationPrintLanguageUsage( "~lang" );
+				return false;
+			}
+
+			string normalizedLanguage = "";
+			if( !ClientTranslationNormalizeLanguageCode(
+					parts[1],
+					normalizedLanguage ) )
+			{
+				ClientTranslationPrintLanguageUsage( "~lang" );
+				return false;
+			}
+
+			ClientTranslationUniversalSourceLanguage = normalizedLanguage;
+			ClientTranslationUniversalTargetLanguage = normalizedLanguage;
+			Message( "FORP universal language: " + normalizedLanguage );
+			return false;
+		}
+
+		if( parts[0] == "~tl_in" )
+		{
+			if( parts.length() != 2 ||
+			    ( parts[1] != "0" && parts[1] != "1" ) )
+			{
+				ClientTranslationPrintToggleUsage( "~tl_in" );
+				return false;
+			}
+
+			ClientTranslationUniversalIncomingEnabled = parts[1] == "1";
+			Message(
+				"FORP universal incoming tags: " +
+				ClientTranslationOnOffText(
+					ClientTranslationUniversalIncomingEnabled ) );
+			return false;
+		}
+
+		if( parts[0] == "~tl_out_tag" )
+		{
+			if( parts.length() != 2 ||
+			    ( parts[1] != "0" && parts[1] != "1" ) )
+			{
+				ClientTranslationPrintToggleUsage( "~tl_out_tag" );
+				return false;
+			}
+
+			ClientTranslationUniversalOutgoingTagEnabled = parts[1] == "1";
+			Message(
+				"FORP universal outgoing source tags: " +
+				ClientTranslationOnOffText(
+					ClientTranslationUniversalOutgoingTagEnabled ) );
+			return false;
+		}
 
 
 		if( parts[0] == "~enru" || parts[0] == "~ruen" )
