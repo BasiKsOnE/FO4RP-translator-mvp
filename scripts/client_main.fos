@@ -79,6 +79,10 @@ bool ClientTranslationUniversalIncomingEnabled = false;
 bool ClientTranslationUniversalOutgoingTagEnabled = false;
 bool ClientTranslationTraceEnabled = false;
 
+#define CLIENT_TRANSLATION_UNIVERSAL_TAG_NONE    ( 0 )
+#define CLIENT_TRANSLATION_UNIVERSAL_TAG_VALID   ( 1 )
+#define CLIENT_TRANSLATION_UNIVERSAL_TAG_INVALID ( 2 )
+
 import void InputBoxKeyPressed( uint8 key ) from "client_screen_inputbox";
 import void InputBoxClipboardInsert()  from "client_screen_inputbox";
 import void SwitchHotkeyLayer(int layer) from "client_hotkey_bind";
@@ -2481,6 +2485,276 @@ string ClientTranslateTcpModeSync( int mode, string& direction, string& text )
 	return "";
 }
 
+bool ClientTranslationUniversalIsWhitespace( uint ch )
+{
+	return ch == 9 || ch == 10 || ch == 13 || ch == 32;
+}
+
+int ClientTranslationTryParseUniversalIncomingTag(
+	string& inputText,
+	string& sourceLanguage,
+	string& payloadText )
+{
+	sourceLanguage = "";
+	payloadText = "";
+
+	uint length = inputText.length();
+	uint position = 0;
+	while( position < length &&
+	       ClientTranslationUniversalIsWhitespace( inputText[ position ] ) )
+	{
+		position++;
+	}
+
+	if( position + 2 > length )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_NONE;
+	}
+
+	string marker = strlwr( substring( inputText, position, 2 ) );
+	if( marker != "tl" )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_NONE;
+	}
+
+	position += 2;
+	if( position >= length )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_INVALID;
+	}
+
+	if( !ClientTranslationUniversalIsWhitespace( inputText[ position ] ) )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_NONE;
+	}
+
+	while( position < length &&
+	       ClientTranslationUniversalIsWhitespace( inputText[ position ] ) )
+	{
+		position++;
+	}
+
+	if( position >= length )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_INVALID;
+	}
+
+	uint languageStart = position;
+	while( position < length &&
+	       !ClientTranslationUniversalIsWhitespace( inputText[ position ] ) )
+	{
+		position++;
+	}
+
+	string normalizedLanguage = "";
+	if( !ClientTranslationNormalizeLanguageCode(
+		substring( inputText, languageStart, position - languageStart ),
+		normalizedLanguage ) )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_INVALID;
+	}
+
+	while( position < length &&
+	       ClientTranslationUniversalIsWhitespace( inputText[ position ] ) )
+	{
+		position++;
+	}
+
+	if( position >= length )
+	{
+		return CLIENT_TRANSLATION_UNIVERSAL_TAG_INVALID;
+	}
+
+	sourceLanguage = normalizedLanguage;
+	payloadText = substring( inputText, position, length - position );
+	return CLIENT_TRANSLATION_UNIVERSAL_TAG_VALID;
+}
+
+string ClientTranslationUniversalIncomingInputText( string& originalMessage )
+{
+	string nearShoutText = ClientTranslationExtractServerNearShoutText( originalMessage );
+	if( nearShoutText.length() > 0 )
+	{
+		return nearShoutText;
+	}
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "--", "--" ) &&
+	    originalMessage.length() > 4 )
+	{
+		return substring( originalMessage, 2, originalMessage.length() - 4 );
+	}
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "++", "++" ) &&
+	    originalMessage.length() > 4 )
+	{
+		return substring( originalMessage, 2, originalMessage.length() - 4 );
+	}
+
+	if( ClientTranslationHasWholeDisplayWrapper( originalMessage, "*", "*" ) &&
+	    originalMessage.length() > 2 )
+	{
+		return substring( originalMessage, 1, originalMessage.length() - 2 );
+	}
+
+	uint volumeMarkerEnd = 0;
+	if( ClientFileBridgeIsValidVolumeMarker( originalMessage, 0, volumeMarkerEnd ) &&
+	    volumeMarkerEnd + 1 < originalMessage.length() &&
+	    originalMessage[ volumeMarkerEnd ] == ' ' )
+	{
+		return substring(
+			originalMessage,
+			volumeMarkerEnd + 1,
+			originalMessage.length() - volumeMarkerEnd - 1 );
+	}
+
+	return originalMessage;
+}
+
+string ClientTranslationBuildUniversalEnvelope(
+	string& sourceLanguage,
+	string& targetLanguage,
+	string& text )
+{
+	return "FORP_LANG1\nsource_language=" + sourceLanguage +
+		"\ntarget_language=" + targetLanguage +
+		"\n\n" + text;
+}
+
+string ClientTranslateUniversalTcpSync(
+	string& sourceLanguage,
+	string& targetLanguage,
+	string& text )
+{
+	string transportDirection = "en_to_ru";
+	string envelope =
+		ClientTranslationBuildUniversalEnvelope(
+			sourceLanguage,
+			targetLanguage,
+			text );
+	return ClientTranslateTcpModeSync( 4, transportDirection, envelope );
+}
+
+void ClientTranslationTraceUniversalIncoming(
+	string channel,
+	string sourceLanguage,
+	string targetLanguage,
+	bool changed,
+	string reason,
+	string& originalMessage,
+	string& finalMessage )
+{
+	if( !ClientTranslationTraceEnabled )
+	{
+		return;
+	}
+
+	if( sourceLanguage.length() == 0 )
+	{
+		sourceLanguage = "-";
+	}
+
+	if( targetLanguage.length() == 0 )
+	{
+		targetLanguage = "-";
+	}
+
+	Message(
+		"[TL UNIVERSAL TRACE] channel=" + channel +
+		" source=" + sourceLanguage +
+		" target=" + targetLanguage +
+		" changed=" + ( changed ? "1" : "0" ) +
+		" reason=" + reason +
+		" original=\"" + ClientTranslationTracePreview( originalMessage ) + "\"" +
+		" final=\"" + ClientTranslationTracePreview( finalMessage ) + "\"" );
+}
+
+bool ClientTranslationApplyUniversalIncomingPayload(
+	string& originalMessage,
+	string& displayMessage,
+	string channel,
+	string& traceDirection,
+	int& traceMode,
+	bool& changed )
+{
+	changed = false;
+
+	if( !ClientTranslationUniversalIncomingEnabled )
+	{
+		return false;
+	}
+
+	string inputText =
+		ClientTranslationUniversalIncomingInputText( originalMessage );
+	string sourceLanguage = "";
+	string payloadText = "";
+	int parseResult =
+		ClientTranslationTryParseUniversalIncomingTag(
+			inputText,
+			sourceLanguage,
+			payloadText );
+
+	if( parseResult == CLIENT_TRANSLATION_UNIVERSAL_TAG_NONE )
+	{
+		return false;
+	}
+
+	string targetLanguage = ClientTranslationUniversalTargetLanguage;
+	if( parseResult == CLIENT_TRANSLATION_UNIVERSAL_TAG_INVALID )
+	{
+		string unchangedMessage = originalMessage;
+		ClientTranslationTraceUniversalIncoming(
+			channel,
+			sourceLanguage,
+			targetLanguage,
+			false,
+			"invalid_tag",
+			originalMessage,
+			unchangedMessage );
+		return false;
+	}
+
+	traceDirection = sourceLanguage + "_to_" + targetLanguage;
+	traceMode = 4;
+
+	string finalPayload = payloadText;
+	string reason = "same_language";
+	if( sourceLanguage != targetLanguage )
+	{
+		string translatedText =
+			ClientTranslateUniversalTcpSync(
+				sourceLanguage,
+				targetLanguage,
+				payloadText );
+
+		if( translatedText.length() > 0 )
+		{
+			finalPayload = translatedText;
+			reason = "translated";
+		}
+		else
+		{
+			reason = "fallback";
+		}
+	}
+
+	displayMessage =
+		ClientTranslationReapplyDisplayMarkup(
+			originalMessage,
+			finalPayload );
+	changed = displayMessage != originalMessage;
+
+	ClientTranslationTraceUniversalIncoming(
+		channel,
+		sourceLanguage,
+		targetLanguage,
+		changed,
+		reason,
+		originalMessage,
+		displayMessage );
+
+	return true;
+}
+
 bool ClientTranslationApplyRadioPayload(
 	string& message,
 	string& direction,
@@ -2600,71 +2874,113 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 	else if( !isTranslationBridge &&
 	         ( isOrdinarySyncMessage || isServerFarShout ) )
 	{
-		traceDirection = ClientTranslationLooksHighByte( message ) ? "ru_to_en" : "en_to_ru";
-		traceMode = ClientTranslationMode( traceDirection );
-
-		string clientTranslationDirection = "";
-		bool shouldSyncTranslate = false;
-
-		if( isServerFarShout )
+		bool universalIncomingHandled = false;
+		if( isOrdinarySyncMessage )
 		{
-			clientTranslationDirection = traceDirection;
-			shouldSyncTranslate = traceMode > 0;
-		}
-		else
-		{
-			shouldSyncTranslate = ShouldClientTranslateIncoming(
-				message,
-				sayType,
-				clientTranslationDirection );
-		}
-
-		bool hasServerNearShoutWrapper = ClientTranslationIsServerNearShout( message );
-
-		if( !shouldSyncTranslate &&
-		    sayType == SAY_NORM &&
-		    hasServerNearShoutWrapper &&
-		    traceMode > 0 )
-		{
-			clientTranslationDirection = traceDirection;
-			shouldSyncTranslate = true;
-		}
-
-		string normalizedClientTranslationText = "";
-		if( isServerFarShout )
-		{
-			normalizedClientTranslationText =
-				ClientTranslationExtractServerFarShoutText( message );
-		}
-		else
-		{
-			normalizedClientTranslationText =
-				ClientTranslationSyncInputText( message );
-		}
-
-		int clientTranslationMode = 0;
-		if( shouldSyncTranslate )
-		{
-			clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
-			if( clientTranslationMode == 3 ||
-			    clientTranslationMode == 4 )
+			universalIncomingHandled =
+				ClientTranslationApplyUniversalIncomingPayload(
+					originalBridgeMessage,
+					message,
+					"speech",
+					traceDirection,
+					traceMode,
+					syncMutationHappened );
+			if( universalIncomingHandled )
 			{
 				skipAsyncTranslation = true;
 			}
 		}
 
-		if( shouldSyncTranslate && normalizedClientTranslationText.length() > 0 )
+		if( !universalIncomingHandled )
 		{
-			if( clientTranslationMode == 3 ||
-			    clientTranslationMode == 4 )
+			traceDirection = ClientTranslationLooksHighByte( message ) ? "ru_to_en" : "en_to_ru";
+			traceMode = ClientTranslationMode( traceDirection );
+
+			string clientTranslationDirection = "";
+			bool shouldSyncTranslate = false;
+
+			if( isServerFarShout )
 			{
-				string translatedClientMessage =
-					ClientTranslateTcpModeSync(
-						clientTranslationMode,
-						clientTranslationDirection,
-						normalizedClientTranslationText );
-				if( translatedClientMessage.length() > 0 )
+				clientTranslationDirection = traceDirection;
+				shouldSyncTranslate = traceMode > 0;
+			}
+			else
+			{
+				shouldSyncTranslate = ShouldClientTranslateIncoming(
+					message,
+					sayType,
+					clientTranslationDirection );
+			}
+
+			bool hasServerNearShoutWrapper = ClientTranslationIsServerNearShout( message );
+
+			if( !shouldSyncTranslate &&
+			    sayType == SAY_NORM &&
+			    hasServerNearShoutWrapper &&
+			    traceMode > 0 )
+			{
+				clientTranslationDirection = traceDirection;
+				shouldSyncTranslate = true;
+			}
+
+			string normalizedClientTranslationText = "";
+			if( isServerFarShout )
+			{
+				normalizedClientTranslationText =
+					ClientTranslationExtractServerFarShoutText( message );
+			}
+			else
+			{
+				normalizedClientTranslationText =
+					ClientTranslationSyncInputText( message );
+			}
+
+			int clientTranslationMode = 0;
+			if( shouldSyncTranslate )
+			{
+				clientTranslationMode = ClientTranslationMode( clientTranslationDirection );
+				if( clientTranslationMode == 3 ||
+				    clientTranslationMode == 4 )
 				{
+					skipAsyncTranslation = true;
+				}
+			}
+
+			if( shouldSyncTranslate && normalizedClientTranslationText.length() > 0 )
+			{
+				if( clientTranslationMode == 3 ||
+				    clientTranslationMode == 4 )
+				{
+					string translatedClientMessage =
+						ClientTranslateTcpModeSync(
+							clientTranslationMode,
+							clientTranslationDirection,
+							normalizedClientTranslationText );
+					if( translatedClientMessage.length() > 0 )
+					{
+						string translatedDisplayMessage = "";
+						if( isServerFarShout )
+						{
+							translatedDisplayMessage =
+								"???: |0x00FF0000 !!! ++" +
+								translatedClientMessage +
+								"++ !!!";
+						}
+						else
+						{
+							translatedDisplayMessage =
+								ClientTranslationReapplyDisplayMarkup(
+									message,
+									translatedClientMessage );
+						}
+
+						message = translatedDisplayMessage;
+						syncMutationHappened = true;
+					}
+				}
+				else
+				{
+					string translatedClientMessage = ClientTranslateSync( clientTranslationDirection, normalizedClientTranslationText );
 					string translatedDisplayMessage = "";
 					if( isServerFarShout )
 					{
@@ -2681,38 +2997,16 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 								translatedClientMessage );
 					}
 
-					message = translatedDisplayMessage;
-					syncMutationHappened = true;
-				}
-			}
-			else
-			{
-				string translatedClientMessage = ClientTranslateSync( clientTranslationDirection, normalizedClientTranslationText );
-				string translatedDisplayMessage = "";
-				if( isServerFarShout )
-				{
-					translatedDisplayMessage =
-						"???: |0x00FF0000 !!! ++" +
-						translatedClientMessage +
-						"++ !!!";
-				}
-				else
-				{
-					translatedDisplayMessage =
-						ClientTranslationReapplyDisplayMarkup(
-							message,
-							translatedClientMessage );
-				}
-
-				if( clientTranslationMode == 1 )
-				{
-					message = translatedDisplayMessage;
-					syncMutationHappened = true;
-				}
-				else if( clientTranslationMode == 2 )
-				{
-					message += "\n" + translatedDisplayMessage;
-					syncMutationHappened = true;
+					if( clientTranslationMode == 1 )
+					{
+						message = translatedDisplayMessage;
+						syncMutationHappened = true;
+					}
+					else if( clientTranslationMode == 2 )
+					{
+						message += "\n" + translatedDisplayMessage;
+						syncMutationHappened = true;
+					}
 				}
 			}
 		}
